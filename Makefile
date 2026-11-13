@@ -9,7 +9,8 @@
 # at framework commit 7c5c012 and free to change here.
 #
 # Needs: a C++17 compiler. On Linux also the ALSA headers
-# (Debian, Ubuntu, Raspberry Pi OS: sudo apt install libasound2-dev).
+# (Debian, Ubuntu, Raspberry Pi OS: sudo apt install libasound2-dev;
+# Fedora: sudo dnf install alsa-lib-devel).
 
 # -O2: the DSP needs the optimiser.
 CXXFLAGS ?= -O2

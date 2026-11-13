@@ -31,8 +31,11 @@ make acid       # just one
 ```
 
 - **macOS:** needs the Xcode command-line tools (`xcode-select --install`).
-- **Linux, Raspberry Pi:** needs a C++ compiler and the ALSA headers:
-  `sudo apt install build-essential libasound2-dev`.
+- **Linux, Raspberry Pi:** needs a C++ compiler, `make` and the ALSA
+  headers:
+  - Debian, Ubuntu, Raspberry Pi OS:
+    `sudo apt install build-essential libasound2-dev`
+  - Fedora: `sudo dnf install gcc-c++ make alsa-lib-devel`
 
 The panel needs 80 × 26 characters, or 80 × 10 for programs that don't
 draw on the display, plus one row for programs that use the LEDs.
