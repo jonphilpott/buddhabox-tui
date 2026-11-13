@@ -24,12 +24,14 @@
  * a string, and rewrites only the lines that changed since the last
  * frame. That keeps it light enough to run over SSH to a Raspberry Pi.
  *
- * LAYOUT (80 columns, 26 rows with a display, 10 without):
+ * LAYOUT (80 columns, 26 rows with a display, 10 without, plus one
+ * once the program lights an LED):
  *   row 0       title bar: program, help or status, page, CPU, MIDI
  *   rows 1-16   the 128 x 64 display in braille (once something is drawn)
  *   rows 17-20  oscilloscope of the output
- *   rows 21-22  the page's 20 switches
- *   rows 23-25  the page's 10 knobs: label, bar, keys and value
+ *   row 21      the 16 LEDs (once one is set)
+ *   rows 22-23  the page's 20 switches
+ *   rows 24-26  the page's 10 knobs: label, bar, keys and value
  */
 
 #include <csignal>
@@ -78,6 +80,13 @@ const char *title = "BUDDHABOX";
 char statusText[80] = "";
 uint32_t statusTime = 0;
 Oled screen;
+
+struct Led {
+  float colour = 0.0f; // 0 off; above 0, a hue (see tui::setLed)
+  bool flash = false;
+};
+Led leds[tui::LEDS];
+bool ledsUsed = false; // has the program set any? Then show the row.
 
 bool kitty = false; // the terminal reports key releases
 volatile sig_atomic_t quit = 0, resized = 0;
@@ -575,6 +584,80 @@ void drawScope(std::vector<std::string> &lines) {
 }
 
 /**
+ * The ANSI code for an LED colour.
+ *
+ * The colour is a hue: 0-1 around the colour wheel, red, yellow, green,
+ * cyan, blue, magenta and back to red. Hue to red-green-blue: the wheel
+ * has six sixths, and in each one channel is full, one is empty and one
+ * ramps up or down. Then pick the nearest of the 256-colour palette's
+ * 6 x 6 x 6 cube (ESC [ 38 ; 5 ; n m), which nearly every terminal
+ * shows; 24-bit colour codes would be finer but aren't everywhere.
+ */
+std::string ledColour(float colour) {
+  float h = (colour >= 1.0f ? 0.0f : colour) * 6.0f; // 0 to 6
+  int sixth = (int)h;
+  float f = h - sixth; // how far through this sixth
+  float r = 0, g = 0, b = 0;
+  switch (sixth) {
+  case 0:
+    r = 1;
+    g = f;
+    break; // red to yellow
+  case 1:
+    r = 1 - f;
+    g = 1;
+    break; // yellow to green
+  case 2:
+    g = 1;
+    b = f;
+    break; // green to cyan
+  case 3:
+    g = 1 - f;
+    b = 1;
+    break; // cyan to blue
+  case 4:
+    r = f;
+    b = 1;
+    break; // blue to magenta
+  default:
+    r = 1;
+    b = 1 - f;
+    break; // magenta to red
+  }
+  // Each channel to 0-5, the cube's steps; the cube starts at 16.
+  int n = 16 + 36 * (int)(r * 5 + 0.5f) + 6 * (int)(g * 5 + 0.5f) +
+          (int)(b * 5 + 0.5f);
+  return "\x1b[1;38;5;" + std::to_string(n) + "m";
+}
+
+/**
+ * The LED row: 16 cells of 5 columns, " 1 ● ", the number dim, the LED
+ * lit in its colour or a dim ring when off. Flashing LEDs are lit for
+ * the first 250 ms of each half-second.
+ */
+void drawLeds(std::vector<std::string> &lines) {
+  if (!ledsUsed)
+    return;
+  bool flashOn = (now() / 250) % 2 == 0;
+  std::string s;
+  for (int i = 0; i < tui::LEDS; i++) {
+    const Led &led = leds[i];
+    char number[4];
+    snprintf(number, sizeof(number), "%2d", i + 1);
+    s += DIM;
+    s += number;
+    s += RESET;
+    s += ' ';
+    bool lit = led.colour > 0.0f && (!led.flash || flashOn);
+    s += lit ? ledColour(led.colour) : std::string(DIM);
+    s += lit ? "●" : "○"; // ● or ○
+    s += RESET;
+    s += ' ';
+  }
+  lines.push_back(s);
+}
+
+/**
  * The page's two rows of ten switches: "1●Label ", the key dim, the
  * light lit.
  */
@@ -654,6 +737,7 @@ void draw() {
   if (screen.used())
     drawScreen(lines);
   drawScope(lines);
+  drawLeds(lines);
   drawSwitches(lines);
   drawKnobs(lines);
 
@@ -730,6 +814,20 @@ bool tui::menuPressed() {
     return false;
   spacePresses--;
   return true;
+}
+
+void tui::setLed(int i, float colour) {
+  if (i < 0 || i >= LEDS)
+    return;
+  leds[i].colour = colour < 0.0f ? 0.0f : (colour > 1.0f ? 1.0f : colour);
+  ledsUsed = true;
+}
+
+void tui::setLedFlash(int i, bool flash) {
+  if (i < 0 || i >= LEDS)
+    return;
+  leds[i].flash = flash;
+  ledsUsed = true;
 }
 
 Oled &tui::display() { return screen; }

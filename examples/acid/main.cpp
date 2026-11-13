@@ -53,6 +53,8 @@
  *                 Chaos, Delay Mix. A knob and its menu item are the
  *                 same setting: moving either moves the other.
  *   switch 0 (1)  Randomize
+ *   LEDs 1-16     the sequence: red an accent, green a plain note, off a
+ *                 rest, flashing a slide, cyan the step playing
  *   MIDI          a note between C1 and C3 sets Root: play the bass
  *                 line's key from a keyboard
  *
@@ -396,6 +398,22 @@ void audioCallback(const float *in, float *out, int frames) {
 }
 
 /**
+ * Show the sequence on the 16 LEDs, one per step.
+ */
+void showSteps() {
+  int playing = step;
+  for (int i = 0; i < kSteps; i++) {
+    float colour = rests[i]     ? tui::LED_OFF
+                   : accents[i] ? tui::LED_RED
+                                : tui::LED_GREEN;
+    if (i == playing && !rests[i])
+      colour = tui::LED_CYAN;
+    tui::setLed(i, colour);
+    tui::setLedFlash(i, slides[i] && i != playing);
+  }
+}
+
+/**
  * Draw one frame. The yellow top band (rows 0-15 on two-colour panels)
  * holds the title and the sequence; the blue rest holds the menu.
  */
@@ -515,5 +533,6 @@ void loop() {
   if (tui::millis() - lastFrame >= 50) {
     lastFrame = tui::millis();
     drawScreen();
+    showSteps();
   }
 }

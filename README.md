@@ -3,8 +3,9 @@
 A virtual BuddhaBox in the terminal for macOS and Linux (x86 and
 Raspberry Pi). Programs are built from the
 BuddhaBox DSP modules and play through the computer's own sound card. Each one shows the same panel:
-a 128 × 64 OLED-style display, an oscilloscope, and four pages of
-controls (80 switches and 40 knobs), all played from the keyboard.
+a 128 × 64 OLED-style display, an oscilloscope, 16 coloured LEDs, and
+four pages of controls (80 switches and 40 knobs), all played from the
+keyboard.
 
 ```
  ACID         up/dn item  lt/rt value  ^C quit       [1234] CPU  1.3% pk 2.3% M
@@ -34,7 +35,7 @@ make acid       # just one
   `sudo apt install build-essential libasound2-dev`.
 
 The panel needs 80 × 26 characters, or 80 × 10 for programs that don't
-draw on the display.
+draw on the display, plus one row for programs that use the LEDs.
 
 ## The keys
 
@@ -108,6 +109,9 @@ void loop() { hz = 110.0f * fastExp2(3.0f * tui::knob(0)); }
 - MIDI: `Midi::begin` and `Midi::read`.
 - The panel: `tui::knob`, `switchOn`, `switchPressed`, `menuMove`,
   `menuAdjust`, `menuPressed`, `display`, `status` and `millis`.
+- LEDs: `tui::setLed(i, colour)`, where 0 is off and up to 1 picks a
+  colour around the wheel (`LED_RED`, `LED_GREEN`, `LED_BLUE` and so
+  on), and `tui::setLedFlash(i, true)` to make it blink.
 - The menu: `Menu`, in `src/bbtui/menu.h`. Like the board's, but with
   no edit mode: left/right change a value directly.
 
@@ -187,7 +191,7 @@ came from. Any mistakes made in porting are ours, not
 Mutable Instruments'.
 
 That code is Copyright (c) 2012-2023 Emilie Gillet and released under
-the MIT licence. The full notice is in `LICENSE.framework`, and it must
+the MIT licence. The full notice is in `LICENSE.mutable`, and it must
 be kept with any copy of this code or substantial part of it.
 
 The rest of buddhabox-tui is Copyright (c) 2026 Jon Philpott, also under

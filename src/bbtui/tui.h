@@ -24,6 +24,9 @@
  *   a s d f g h j k l ;     knobs 10p+0 to 10p+9 up (Shift: fine steps)
  *   z x c v b n m , . /     knobs 10p+0 to 10p+9 down
  *   [ ]                     previous, next page
+ *
+ * Above the switches, 16 LEDs (setLed(), setLedFlash()) for the program
+ * to show what it likes: steps, gates, warnings.
  *   up/down                 the menu: move the highlight
  *   left/right              the menu: change the highlighted value
  *   space                   the menu: run an action item
@@ -204,6 +207,18 @@ constexpr int KNOBS_PER_PAGE = 10;
 constexpr int SWITCHES_PER_PAGE = 20;
 constexpr int KNOBS = PAGES * KNOBS_PER_PAGE;       // 40
 constexpr int SWITCHES = PAGES * SWITCHES_PER_PAGE; // 80
+constexpr int LEDS = 16;
+
+// LED colours for setLed(): positions around the colour wheel (the
+// value times 360 is the hue in degrees). Any value between works too:
+// 0.08 is orange, 0.75 violet.
+constexpr float LED_OFF = 0.0f;
+constexpr float LED_RED = 1.0f;
+constexpr float LED_YELLOW = 1.0f / 6.0f;
+constexpr float LED_GREEN = 2.0f / 6.0f;
+constexpr float LED_CYAN = 3.0f / 6.0f;
+constexpr float LED_BLUE = 4.0f / 6.0f;
+constexpr float LED_MAGENTA = 5.0f / 6.0f;
 
 /**
  * Name the program in the panel's title bar.
@@ -290,6 +305,38 @@ bool switchPressed(int i);
  *   tui::setSwitchOn(step, true);  // light the playing step
  */
 void setSwitchOn(int i, bool on);
+
+/**
+ * Light an LED. The 16 LEDs sit in a row between the oscilloscope and
+ * the switches; the row appears the first time a program sets one.
+ *
+ * @param i       The LED, 0-15
+ * @param colour  0 (LED_OFF) turns it off. Anything above, up to 1,
+ *                picks a colour around the colour wheel: 1/6 yellow,
+ *                1/3 green, 1/2 cyan, 2/3 blue, 5/6 magenta, 1 red
+ *                (the LED_ constants). Values in between blend: 0.08
+ *                is orange. Values outside 0 to 1 are clamped.
+ *
+ * Example:
+ *   tui::setLed(0, tui::LED_GREEN);   // running
+ *   tui::setLed(1, level);            // a level as a colour
+ *   tui::setLed(2, tui::LED_OFF);
+ */
+void setLed(int i, float colour);
+
+/**
+ * Make an LED flash, or stop it flashing. A flashing LED blinks in its
+ * colour twice a second, in step with every other flashing LED; an LED
+ * that is off stays off.
+ *
+ * @param i      The LED, 0-15
+ * @param flash  true to flash, false to shine steadily
+ *
+ * Example:
+ *   tui::setLed(3, tui::LED_RED);
+ *   tui::setLedFlash(3, true);        // a warning
+ */
+void setLedFlash(int i, bool flash);
 
 /**
  * @return  Up/down presses since the last call: down +1, up -1 each.

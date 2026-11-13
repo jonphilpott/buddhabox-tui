@@ -221,7 +221,8 @@ int v; if (queue.pop(v))  // reader thread
 <p>A buddhabox-tui program looks like a BuddhaBox sketch. It defines three global functions, and the library supplies main():</p>
 <p>setup()          once, before the audio starts: configure modules, label the panel, call AudioEngine::begin() loop()           over and over (about 1000 times a second) on the main thread: read knobs, switches, menu and MIDI; draw on the display. Never block in here. audioCallback()  on the audio thread, whenever the sound card needs another 256 frames</p>
 <p>THE PANEL (drawn in the terminal; keys on a US layout): four pages, each with 10 knobs and 20 switches, so 40 knobs and 80 switches in all. The keys play the page on screen; [ and ] change page. On page p (0-3) the keys reach knobs 10p to 10p+9 and switches 20p to 20p+19:</p>
-<p>1 2 3 4 5 6 7 8 9 0     switches 20p+0 to 20p+9 q w e r t y u i o p     switches 20p+10 to 20p+19 a s d f g h j k l ;     knobs 10p+0 to 10p+9 up (Shift: fine steps) z x c v b n m , . /     knobs 10p+0 to 10p+9 down [ ]                     previous, next page up/down                 the menu: move the highlight left/right              the menu: change the highlighted value space                   the menu: run an action item Ctrl-C                  quit</p>
+<p>1 2 3 4 5 6 7 8 9 0     switches 20p+0 to 20p+9 q w e r t y u i o p     switches 20p+10 to 20p+19 a s d f g h j k l ;     knobs 10p+0 to 10p+9 up (Shift: fine steps) z x c v b n m , . /     knobs 10p+0 to 10p+9 down [ ]                     previous, next page</p>
+<p>Above the switches, 16 LEDs (setLed(), setLedFlash()) for the program to show what it likes: steps, gates, warnings. up/down                 the menu: move the highlight left/right              the menu: change the highlighted value space                   the menu: run an action item Ctrl-C                  quit</p>
 <h5>Threads</h5>
 <p>loop() and audioCallback() run at the same time on different threads, as loop() and the DMA interrupt do on the board. Share settings the same way: loop() writes a float or a bool, the callback reads it. (Strictly, C++ calls an unsynchronised float a data race; on x86 and ARM an aligned 32-bit store can&#x27;t tear, so the callback sees the old value or the new one, never half of each.)</p>
 <p class="example-label">Example (a sine whose pitch is knob 0):</p>
@@ -314,6 +315,19 @@ tui::setSwitch(20, &quot;Seq&quot;);               // page 2, key 1</code></pre>
 <pre><code>tui::setSwitchOn(step, true);  // light the playing step</code></pre>
 <div class="method-param">Param <code>i</code> — The switch, 0-79</div>
 <div class="method-param">Param <code>on</code> — The new state</div></div></div>
+<div class="method-block"><div class="method-sig">void tui::setLed(int i, float colour)</div><div class="method-desc"><p>Light an LED. The 16 LEDs sit in a row between the oscilloscope and the switches; the row appears the first time a program sets one.</p>
+<p class="example-label">Example:</p>
+<pre><code>tui::setLed(0, tui::LED_GREEN);   // running
+tui::setLed(1, level);            // a level as a colour
+tui::setLed(2, tui::LED_OFF);</code></pre>
+<div class="method-param">Param <code>i</code> — The LED, 0-15</div>
+<div class="method-param">Param <code>colour</code> — 0 (LED_OFF) turns it off. Anything above, up to 1, picks a colour around the colour wheel: 1/6 yellow, 1/3 green, 1/2 cyan, 2/3 blue, 5/6 magenta, 1 red (the LED_ constants). Values in between blend: 0.08 is orange. Values outside 0 to 1 are clamped.</div></div></div>
+<div class="method-block"><div class="method-sig">void tui::setLedFlash(int i, bool flash)</div><div class="method-desc"><p>Make an LED flash, or stop it flashing. A flashing LED blinks in its colour twice a second, in step with every other flashing LED; an LED that is off stays off.</p>
+<p class="example-label">Example:</p>
+<pre><code>tui::setLed(3, tui::LED_RED);
+tui::setLedFlash(3, true);        // a warning</code></pre>
+<div class="method-param">Param <code>i</code> — The LED, 0-15</div>
+<div class="method-param">Param <code>flash</code> — true to flash, false to shine steadily</div></div></div>
 <div class="method-block"><div class="method-sig">int tui::menuMove()</div><div class="method-desc"><p class="example-label">Example:</p>
 <pre><code>menu.update(tui::menuMove(), tui::menuAdjust(), tui::menuPressed());</code></pre>
 <div class="method-returns">Returns: Up/down presses since the last call: down +1, up -1 each. Hand it to Menu::update().</div></div></div>
