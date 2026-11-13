@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BuddhaBox TUI Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <!-- The enso, as in the framework's guide: one brush stroke, left open. -->
+  <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+    <path d="M73 20 A38 38 0 1 0 88 47" fill="none" stroke="#111"
+          stroke-width="11" stroke-linecap="round"/>
+    <path d="M88 47 A38 38 0 0 0 82 30" fill="none" stroke="#111"
+          stroke-width="4" stroke-linecap="round"/>
+  </svg>
+  <h1>BuddhaBox TUI <small>guide</small></h1>
+  <p>A virtual BuddhaBox in the terminal, for macOS and Linux (x86 and
+     Raspberry Pi): the framework's DSP modules, the computer's own sound
+     card and MIDI, and a panel of knobs, switches and a display played
+     from the keyboard.</p>
+</header>
+
+<nav>
+  <a href="#overview">Overview</a>
+  <a href="#quickstart">Quick start</a>
+  <a href="#panel">The panel</a>
+  <a href="#program">A program</a>
+  <a href="#audio">Audio and MIDI</a>
+  <a href="#display">Display and menu</a>
+  <a href="#board">From the board</a>
+  <a href="#examples">Examples</a>
+  <a href="#platforms">Platforms</a>
+  <a href="#tools">Tools</a>
+  <a href="#catalogue">Catalogue</a>
+  <a href="reference.html">API reference</a>
+</nav>
+
+<div class="container">
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="overview">
+<h2>Overview</h2>
+
+<p>The BuddhaBox framework runs on an STM32 Black Pill with an I2S DAC,
+pots and an OLED. This project runs the same DSP modules on a desktop or
+a Raspberry Pi, and replaces the hardware with a panel drawn in the
+terminal. It began as a copy of the framework's DSP library and is free
+to diverge from it.</p>
+
+<div class="stats">
+  <div class="stat-box"><div class="value">40</div><div class="label">Knobs</div></div>
+  <div class="stat-box"><div class="value">80</div><div class="label">Switches</div></div>
+  <div class="stat-box"><div class="value">128 × 64</div><div class="label">Display</div></div>
+  <div class="stat-box"><div class="value">0</div><div class="label">Libraries beyond the OS</div></div>
+</div>
+
+<h3>Design principles</h3>
+<ul>
+  <li><strong>A sketch, not an app.</strong> A program defines
+    <code>setup()</code>, <code>loop()</code> and
+    <code>audioCallback()</code>, as on the board. The library supplies
+    <code>main()</code>.</li>
+  <li><strong>Native only.</strong> CoreAudio and CoreMIDI on macOS, ALSA
+    on Linux, raw terminal codes for the panel. No JACK, no ncurses, no
+    PortAudio: nothing to install but a compiler (and the ALSA headers on
+    Linux).</li>
+  <li><strong>The same DSP.</strong> <code>src/buddhabox/</code> is the
+    framework's module library, header-only, sample by sample, floats
+    normalised to ±1. Code moves between the two projects with little
+    change.</li>
+  <li><strong>Memory is plentiful.</strong> Buffers are still fixed
+    arrays sized by template parameters, but in seconds rather than
+    kilobytes: <code>DelayLine&lt;441000&gt;</code> is a 10 s echo.</li>
+</ul>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="quickstart">
+<h2>Quick start</h2>
+
+<h3>1. Install a compiler</h3>
+<h4>macOS</h4>
+<pre><code>xcode-select --install     # clang, make and git</code></pre>
+<h4>Linux and Raspberry Pi OS</h4>
+<pre><code>sudo apt install build-essential libasound2-dev   # Debian, Ubuntu, Pi OS
+# sudo dnf install gcc-c++ make alsa-lib-devel    # Fedora</code></pre>
+
+<h3>2. Build and run</h3>
+<pre><code>make              # every example, into build/
+make acid         # just one
+./build/acid      # Ctrl-C to quit</code></pre>
+<p>The panel needs a terminal of at least 80 × 26 characters (80 × 10
+for programs that don't use the display).</p>
+
+<h3>3. Start your own</h3>
+<pre><code>python3 tools/new_project.py ../my_synth            # from examples/sine
+python3 tools/new_project.py ../bells --example singing_bowls
+cd ../my_synth &amp;&amp; make &amp;&amp; ./my_synth</code></pre>
+<p>The new folder holds <code>main.cpp</code>, a <code>Makefile</code>
+that builds against this checkout, and a <code>.gitignore</code>. Or add
+a folder to <code>examples/</code>: <code>make</code> finds every
+<code>examples/&lt;name&gt;/main.cpp</code> by itself.</p>
+
+<h3>4. The smallest program</h3>
+<p>This is <code>examples/sine/main.cpp</code>, a tone played from a knob
+or a MIDI keyboard:</p>
+<!-- INCLUDE examples/sine/main.cpp -->
+<pre><code>/**
+ * @file main.cpp
+ * @brief The smallest buddhabox-tui program: a sine tone you can play
+ *        from a knob or a MIDI keyboard.
+ *
+ * Every buddhabox-tui program has the same parts:
+ * 1. DSP objects as globals (from buddhabox-framework).
+ * 2. audioCallback(): fills each block of output on the audio thread.
+ * 3. setup(): labels the panel, configures the objects, starts audio.
+ * 4. loop(): reads the panel and MIDI on the main thread and hands the
+ *    results to the audio through plain globals.
+ *
+ * Panel:
+ *   knob 0 (a/z)  Pitch, 55 Hz to 880 Hz
+ *   knob 1 (s/x)  Level
+ *   switch 0 (1)  Mute
+ *   MIDI          a note on sets the pitch
+ */
+
+#include &quot;bbtui/tui.h&quot;
+#include &quot;buddhabox/core/dsp_common.h&quot;
+#include &quot;buddhabox/core/midi_utils.h&quot;
+#include &quot;buddhabox/osc/sine.h&quot;
+
+using namespace bb;
+
+// 1. DSP objects, and the settings loop() hands to the audio thread.
+SineOscillator osc;
+float hz = 220.0f, level = 0.3f;
+bool mute = false;
+
+// 2. The audio: one sine, the same on both channels.
+void audioCallback(const float *in, float *out, int frames) {
+  float gain = mute ? 0.0f : level;
+  for (int i = 0; i &lt; frames; i++)
+    out[2 * i] = out[2 * i + 1] = gain * osc.next(hz / SAMPLE_RATE);
+}
+
+// 3. Set-up.
+void setup() {
+  tui::setTitle(&quot;SINE&quot;);
+  tui::setKnob(0, &quot;Pitch&quot;, 0.5f);
+  tui::setKnob(1, &quot;Level&quot;, 0.3f);
+  tui::setSwitch(0, &quot;Mute&quot;);
+  Midi::begin();
+  AudioEngine::begin();
+}
+
+// 4. Controls. The pitch knob covers four octaves; fastExp2() turns its
+//    0-1 into a ratio, so each tenth of the knob is the same interval.
+void loop() {
+  hz = 55.0f * fastExp2(4.0f * tui::knob(0));
+  level = tui::knob(1);
+  mute = tui::switchOn(0);
+
+  // A MIDI note sets the pitch knob to match, so the panel shows it.
+  Midi::Message m;
+  while (Midi::read(m))
+    if (m.isNoteOn())
+      tui::setKnob(0, &quot;Pitch&quot;, fastLog2(midiToFreq(m.data1) / 55.0f) / 4.0f);
+}</code></pre>
+<!-- /INCLUDE -->
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="panel">
+<h2>The panel</h2>
+
+<p>From top to bottom: a title bar, the display (once the program draws
+on it), an oscilloscope of the output, and one page of controls.</p>
+
+<table>
+  <tr><th>Rows</th><th>What</th></tr>
+  <tr><td>1</td><td>Title bar: program name, key help (or a status
+    message for 5 s), pages <code>[1234]</code>, CPU now and at peak, the
+    MIDI light</td></tr>
+  <tr><td>16</td><td>The 128 × 64 display in braille, top 16 pixels
+    yellow and the rest cyan, like a two-colour 0.96" OLED</td></tr>
+  <tr><td>4</td><td>Oscilloscope: 14.5 ms of output, triggered on a
+    rising zero crossing so steady tones stand still</td></tr>
+  <tr><td>2</td><td>The page's 20 switches</td></tr>
+  <tr><td>3</td><td>The page's 10 knobs: label, bar, keys and value
+    (0–100)</td></tr>
+</table>
+
+<h3>Keys</h3>
+<table>
+  <tr><th>Keys</th><th>Control</th></tr>
+  <tr><td><code>1</code> – <code>0</code></td><td>Switches 1–10 of the page</td></tr>
+  <tr><td><code>q</code> – <code>p</code></td><td>Switches 11–20 of the page</td></tr>
+  <tr><td><code>a</code> – <code>;</code></td><td>Knobs 1–10 up (Shift: fine steps)</td></tr>
+  <tr><td><code>z</code> – <code>/</code></td><td>Knobs 1–10 down</td></tr>
+  <tr><td><code>[</code> <code>]</code></td><td>Previous, next page</td></tr>
+  <tr><td>Up, down</td><td>Menu: move the highlight</td></tr>
+  <tr><td>Left, right</td><td>Menu: change the highlighted value</td></tr>
+  <tr><td>Space</td><td>Menu: run an action item</td></tr>
+  <tr><td>Ctrl-C</td><td>Quit</td></tr>
+</table>
+
+<h3>Pages</h3>
+<p>There are four pages of 10 knobs and 20 switches. In code, knobs are
+numbered 0–39 and switches 0–79, page by page: knob 12 is the third knob
+on page 2 (keys <code>d</code>/<code>c</code>), and switch 25 is the
+sixth switch on page 2 (key <code>6</code>). The title bar shows the
+pages as <code>[1234]</code>: the page on screen bold, empty pages dim.
+Changing page lets go of any held knob or momentary switch, so a key
+coming up on the new page can't strand one on the old.</p>
+
+<h3>Key releases</h3>
+<p>An ordinary terminal reports a key going down, and repeats it while
+held, but never reports it coming up. The panel works within that:</p>
+<ul>
+  <li>A knob key steps the knob by 0.01 (0.001 with Shift) on each press
+    and on each repeat.</li>
+  <li>A momentary switch lights for 150 ms per press.</li>
+  <li>A toggle ignores presses that come within 120 ms of the last one:
+    those are the keyboard's repeats, not new presses.</li>
+</ul>
+<p>kitty, WezTerm, Ghostty, foot and recent iTerm2 speak the kitty
+keyboard protocol, which reports releases. The panel asks at start-up
+and, when it is there, holds work as they should: a held knob key sweeps
+smoothly after 0.3 s (the full range in 2.5 s, or 20 s with Shift), and a
+momentary switch stays lit until its key comes up.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="program">
+<h2>How a program runs</h2>
+
+<p>Two threads, as on the board, where <code>loop()</code> and the DMA
+interrupt share the processor:</p>
+<div class="flow">
+  <span class="node mod">keys, MIDI<small>main thread</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">loop()<small>~1000 times a second</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node mod">globals<small>floats, bools</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">audioCallback()<small>audio thread, 256 frames</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node out">sound card<small>44.1 kHz stereo</small></span>
+</div>
+<p class="flow-caption">loop() reads the panel and writes settings into
+globals; the audio thread reads them. The panel redraws 30 times a
+second between calls to loop().</p>
+
+<ul>
+  <li><strong><code>setup()</code></strong> runs once: label the panel,
+    configure modules, call <code>AudioEngine::begin()</code>.</li>
+  <li><strong><code>loop()</code></strong> runs about 1000 times a second
+    on the main thread. Read knobs, switches, the menu and MIDI; draw on
+    the display. Never block in it: the keys and the panel are handled
+    between calls.</li>
+  <li><strong><code>audioCallback(in, out, frames)</code></strong> runs on
+    the audio thread. <code>in</code> and <code>out</code> are
+    interleaved stereo floats, −1 to 1; <code>frames</code> is 256. No
+    printing, waiting or allocation in here.</li>
+</ul>
+
+<div class="note"><strong>Sharing values between the threads.</strong>
+Do as the board does: <code>loop()</code> writes a <code>float</code> or
+<code>bool</code> and the callback reads it. Strictly, C++ calls this a
+data race; on x86 and ARM an aligned 32-bit store can't be half-written,
+so the callback sees the old value or the new one. For anything bigger,
+such as a sequence being rewritten, at worst one step plays half old,
+half new.</div>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="audio">
+<h2>Audio and MIDI</h2>
+
+<h3>Output and input</h3>
+<p><code>AudioEngine::begin()</code> opens the default output at
+44.1 kHz; <code>begin(true)</code> opens the default input too. The
+operating system converts to the device's own rate. Input reaches the
+callback through a lock-free queue, a few blocks behind, so playing
+through dry is a little late (fine for echoes; see
+<code>examples/fx</code>).</p>
+<div class="flow">
+  <span class="node mod">input device<small>its own thread</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">queue<small>lock-free, 8 blocks</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">audioCallback()<small>in[], out[]</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node out">output device</span>
+</div>
+<p class="flow-caption">If the input's clock runs faster than the
+output's, the queue drops its oldest samples beyond 4 blocks, so the
+delay can't grow.</p>
+
+<p><code>AudioEngine::cpuLoad()</code> and <code>cpuPeak()</code> report
+the share of each block's time spent in the callback; the title bar shows
+both. A peak at or above 100% means a block was late and the sound
+glitched.</p>
+
+<h3>MIDI</h3>
+<p><code>Midi::begin()</code> connects every MIDI input present at
+start-up. In <code>loop()</code>, take messages until there are none:</p>
+<pre><code>Midi::Message m;
+while (Midi::read(m)) {
+  if (m.isNoteOn()) playNote(m.data1, m.data2 / 127.0f);
+  else if (m.isCC() &amp;&amp; m.data1 == 74) cutoff = m.data2 / 127.0f;
+}</code></pre>
+<p>Notes, control changes, program changes, pitch bend, clock, start,
+stop and continue all come through. The title bar's MIDI light flashes
+for each message except clock.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="display">
+<h2>Display and menu</h2>
+
+<p><code>tui::display()</code> returns the virtual OLED: the board's
+<code>Oled</code> drawing calls (<code>pixel</code>, <code>line</code>,
+<code>rect</code>, <code>text</code>, <code>number</code>) on a 128 × 64
+buffer, without <code>begin()</code> or <code>display()</code>. Draw in
+<code>loop()</code>; the panel shows whatever is in the buffer on its next
+frame. Nothing appears until something is drawn.</p>
+
+<p><code>Menu</code> is the board's menu with one change: the board has a
+single encoder, so it needs an edit mode (press to change a value, press
+again to move on). With four arrow keys there is none: up and down move,
+left and right change the highlighted value, and space runs action
+items.</p>
+<pre><code>Menu::Event e =
+    menu.update(tui::menuMove(), tui::menuAdjust(), tui::menuPressed());
+if (e == Menu::CHANGED)
+  applyMenu();
+else if (e == Menu::ACTION &amp;&amp; menu.selected() == RANDOMIZE)
+  randomize();
+menu.draw(tui::display(), 16, 6); // six rows below a 16-pixel header</code></pre>
+
+<p>A knob can stand for a menu item, as on the board, and here the menu
+can move the knob back, since a virtual pot can be turned from code:
+call <code>tui::setKnob()</code> when the menu changes it.
+<code>examples/acid</code> and <code>examples/noisebox</code> do
+both.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="board">
+<h2>From the board</h2>
+
+<p>Porting a board sketch changes the hardware and nothing else:</p>
+<table>
+  <tr><th>Board</th><th>Here</th></tr>
+  <tr><td><code>audioCallback(int16_t *buffer, uint16_t length)</code></td>
+      <td><code>audioCallback(const float *in, float *out, int frames)</code>:
+      write floats, ±1, and loop over frames, not values</td></tr>
+  <tr><td><code>(int16_t)(x * 32000.0f)</code></td>
+      <td><code>0.92f * softLimitClip(x)</code>, or a
+      <code>Limiter</code>: keep peaks under 1</td></tr>
+  <tr><td><code>AnalogInput pot(PA1)</code></td><td><code>tui::knob(0)</code></td></tr>
+  <tr><td><code>SwitchInput sw(PB5)</code></td>
+      <td><code>tui::switchOn(0)</code>, <code>tui::switchPressed(0)</code></td></tr>
+  <tr><td><code>EncoderInput</code> + push switch</td>
+      <td><code>tui::menuMove()</code>, <code>menuAdjust()</code>,
+      <code>menuPressed()</code></td></tr>
+  <tr><td><code>Oled oled; oled.begin(); oled.display();</code></td>
+      <td><code>Oled &amp;oled = tui::display();</code></td></tr>
+  <tr><td><code>Serial.print(...)</code></td>
+      <td>The title bar shows CPU; <code>tui::status()</code> shows
+      messages</td></tr>
+  <tr><td><code>millis()</code></td><td><code>tui::millis()</code></td></tr>
+  <tr><td>RAM: 128 KB</td><td>As much as the program needs</td></tr>
+</table>
+
+<h3>Where the DSP comes from</h3>
+<p><code>src/buddhabox/</code> was copied from buddhabox-framework at
+commit <code>7c5c012</code>, without its board-only <code>io/</code> and
+<code>engine/</code>. Change it here freely. Differences so far:</p>
+<ul>
+  <li><code>DelayLine</code> takes a 32-bit size (the board's is 16-bit,
+    1.49 s at most). Positions are floats, which hold whole numbers
+    exactly up to 2<sup>24</sup> samples, about 6 minutes; beyond that,
+    delay times round.</li>
+</ul>
+<p>The lookup tables (<code>lut*.h</code>) were generated by the
+framework's <code>tools/gen_tables.cpp</code>, which was not copied.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="examples">
+<h2>Example programs</h2>
+<table>
+  <tr><th>Example</th><th>What it shows</th></tr>
+  <tr><td><code>sine</code></td><td>The smallest program: a knob, a
+    switch, MIDI notes</td></tr>
+  <tr><td><code>acid</code></td><td>A 303-style bass line: sequencer,
+    menu on the display, eight knobs bound to menu items, MIDI notes set
+    the key, a 2 s echo</td></tr>
+  <tr><td><code>noisebox</code></td><td>A West Coast noise box: folded
+    FM, a pulser-driven random sequence, a low-pass gate, an echo of up
+    to 2 s</td></tr>
+  <tr><td><code>easel</code></td><td>A self-playing Buchla Easel-style
+    drone; switch 1 hands it to the knobs</td></tr>
+  <tr><td><code>singing_bowls</code></td><td>Struck modal resonators,
+    chaotic drift and reverb; a Hit switch strikes the bowl</td></tr>
+  <tr><td><code>fx</code></td><td>The audio input through drive, a
+    10 s echo and a spring</td></tr>
+</table>
+<p>All but <code>sine</code> and <code>fx</code> are ports of the
+framework's examples of the same names; the DSP code is unchanged. On an
+Apple-silicon Mac each measured under 3% of the audio thread's time; a
+Raspberry Pi is yet to be measured.</p>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="platforms">
+<h2>Platform notes</h2>
+<ul>
+  <li><strong>macOS:</strong> audio through AudioQueue (three blocks
+    queued, about 17 ms), MIDI through CoreMIDI. A program that opens the
+    input asks once for microphone permission, on behalf of your terminal
+    app; to change your answer, see System Settings, Privacy &amp;
+    Security, Microphone.</li>
+  <li><strong>Linux:</strong> audio through ALSA's <code>default</code>
+    device, which goes through PipeWire or PulseAudio where they run.
+    Choose another with <code>BB_AUDIO_OUT</code> and
+    <code>BB_AUDIO_IN</code>, e.g.
+    <code>BB_AUDIO_OUT=plughw:1 ./build/acid</code>; <code>aplay -l</code>
+    and <code>arecord -l</code> list the cards. MIDI through the ALSA
+    sequencer; devices plugged in later can be connected with
+    <code>aconnect &lt;device&gt; buddhabox-tui</code>.</li>
+  <li><strong>Real-time priority (Linux):</strong> the audio threads ask
+    for it and carry on without. To grant it, add
+    <code>@audio - rtprio 95</code> to
+    <code>/etc/security/limits.conf</code> and join the
+    <code>audio</code> group.</li>
+  <li><strong>Raspberry Pi:</strong> the panel works over SSH, so a Pi
+    with no screen is an instrument you play from a laptop.</li>
+  <li><strong>If a program crashes,</strong> the terminal may be left in
+    raw mode: type <code>reset</code> and press Enter.</li>
+</ul>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="tools">
+<h2>Tools</h2>
+<ul>
+  <li><code>tools/new_project.py</code> creates a project on this
+    checkout: <code>main.cpp</code> copied from an example
+    (<code>--example</code>, default <code>sine</code>), a
+    <code>Makefile</code> and a <code>.gitignore</code>. It refuses to
+    write into a folder that isn't empty.</li>
+  <li><code>tools/gen_docs.py</code> regenerates
+    <code>reference.html</code> from the docstrings, and the catalogue and
+    code listings on this page.</li>
+</ul>
+</section>
+
+<!-- ───────────────────────────────────────────────────────────────── -->
+<section id="catalogue">
+<h2>Module catalogue</h2>
+<p>Every header, with links to its full API in the
+<a href="reference.html">reference</a>.</p>
+<!-- CATALOGUE -->
+<h3>Panel, audio and MIDI</h3><div class="catalogue">
+<div><a href="reference.html#oled">Oled</a> — The virtual OLED: a 128 x 64, one-bit frame buffer with the</div>
+<div><a href="reference.html#menuitem">MenuItem</a>, <a href="reference.html#menu">Menu</a> — A scrolling settings menu on the virtual OLED, driven by the</div>
+<div><a href="reference.html#ring">Ring</a> — A lock-free queue for one writer thread and one reader thread.</div>
+<div><a href="reference.html#midi-message">Midi::Message</a> — Everything a buddhabox-tui program needs besides the DSP</div>
+</div>
+<h3>Core</h3><div class="catalogue">
+<div><a href="reference.html#dsp-common-h">dsp_common.h</a> — Shared constants, types, and utility functions for the BuddhaBox DSP</div>
+<div><a href="reference.html#midi-utils-h">midi_utils.h</a> — MIDI note number to frequency conversion and note constants.</div>
+<div><a href="reference.html#lfsr">LFSR</a>, <a href="reference.html#random">Random</a> — LFSR-based random number generator for non-audio randomness.</div>
+</div>
+<h3>Oscillators</h3><div class="catalogue">
+<div><a href="reference.html#basicoscillator">BasicOscillator</a> — Plaits&#x27; alias-free saw / square / triangle / slope oscillator.</div>
+<div><a href="reference.html#formantoscillator">FormantOscillator</a> — Plaits&#x27; formant oscillator: a hard-synced sine.</div>
+<div><a href="reference.html#grainletoscillator">GrainletOscillator</a> — Plaits&#x27; grainlet oscillator: one windowed sine grain per cycle.</div>
+<div><a href="reference.html#harmonicoscillator">HarmonicOscillator</a> — Additive oscillator: up to 32 harmonics from one sine.</div>
+<div><a href="reference.html#lfo">LFO</a> — Low Frequency Oscillator for modulating audio parameters over time.</div>
+<div><a href="reference.html#oscillator">Oscillator</a> — Audio-rate oscillator with sine, saw, square, and triangle waveforms.</div>
+<div><a href="reference.html#polyblep-h">polyblep.h</a> — PolyBLEP corrections: the standard trick for alias-free jumps.</div>
+<div><a href="reference.html#sineoscillator">SineOscillator</a>, <a href="reference.html#cosineoscillator">CosineOscillator</a> — Table sine oscillator and the recursive cosine oscillator.</div>
+<div><a href="reference.html#stringsynthoscillator">StringSynthOscillator</a> — Divide-down string-machine oscillator from Plaits.</div>
+<div><a href="reference.html#variableshapeoscillator">VariableShapeOscillator</a> — Plaits&#x27; morphing triangle-saw-square oscillator with hard sync.</div>
+<div><a href="reference.html#vosimoscillator">VosimOscillator</a> — VOSIM (&quot;VOice SIMulation&quot;) oscillator from Plaits.</div>
+<div><a href="reference.html#zoscillator">ZOscillator</a> — Plaits&#x27; Z oscillator: Casio CZ-style &quot;resonance&quot; waveforms.</div>
+</div>
+<h3>Noise</h3><div class="catalogue">
+<div><a href="reference.html#clockednoise">ClockedNoise</a> — Band-limited sample-and-hold noise, from Plaits.</div>
+<div><a href="reference.html#dust">Dust</a> — Sparse random impulses (&quot;crackle&quot;), from Plaits.</div>
+<div><a href="reference.html#whitenoise">WhiteNoise</a>, <a href="reference.html#pinknoise">PinkNoise</a> — White and pink noise generators for the BuddhaBox DSP framework.</div>
+<div><a href="reference.html#particle">Particle</a> — Randomly pitched resonant pings, from Plaits&#x27; particle engine.</div>
+<div><a href="reference.html#smoothrandom">SmoothRandom</a> — A smoothly wandering random signal (a random LFO), from Plaits.</div>
+</div>
+<h3>Filters</h3><div class="catalogue">
+<div><a href="reference.html#allpassfilter">AllpassFilter</a> — Schroeder allpass filter for phase dispersion and reverb diffusion.</div>
+<div><a href="reference.html#dcblocker">DcBlocker</a> — Removes DC offset and sub-audio drift.</div>
+<div><a href="reference.html#hilbert">Hilbert</a> — Hilbert transformer: two outputs 90 degrees apart (Warps).</div>
+<div><a href="reference.html#moogfilter">MoogFilter</a> — 4-pole Moog ladder filter approximation with resonance.</div>
+<div><a href="reference.html#ms20filter">Ms20Filter</a> — MS-20 low-pass filter: resonance that screams but keeps the bass.</div>
+<div><a href="reference.html#onepoleout">OnePoleOut</a>, <a href="reference.html#onepole">OnePole</a> — Zero-delay-feedback one-pole low-pass / high-pass filter.</div>
+<div><a href="reference.html#svfilter">SVFilter</a> — State Variable Filter (SVF) with simultaneous low/high/bandpass</div>
+<div><a href="reference.html#svfout">SvfOut</a>, <a href="reference.html#svf">Svf</a> — Zero-delay-feedback state-variable filter (stmlib&#x27;s Svf).</div>
+<div><a href="reference.html#vowelfilter">VowelFilter</a> — A &quot;talking&quot; filter: five formant band-passes, from Plaits.</div>
+</div>
+<h3>Modulation</h3><div class="catalogue">
+<div><a href="reference.html#bouncingball">BouncingBall</a> — An envelope that falls and bounces like a dropped ball (Peaks).</div>
+<div><a href="reference.html#tempoclock">TempoClock</a> — Sample-accurate tempo clock for synchronizing events and sequencing.</div>
+<div><a href="reference.html#clocktoramp">ClockToRamp</a> — Turns a clock into a smooth phase ramp (Tides 2 / Marbles).</div>
+<div><a href="reference.html#colour">Colour</a> — Five-note just-intonation scales (&quot;colours&quot;) plus a melody maker.</div>
+<div><a href="reference.html#envelope">Envelope</a> — Attack-Release (AR) envelope generator for shaping amplitude over</div>
+<div><a href="reference.html#hysteresisquantizer">HysteresisQuantizer</a> — Turns a 0..1 knob into N steps without flicker at the edges.</div>
+<div><a href="reference.html#lag">Lag</a> — Clock-synchronised glide between steps: Marbles&#x27; &quot;steps&quot; control.</div>
+<div><a href="reference.html#lorenz">Lorenz</a> — Lorenz attractor: a chaotic, never-repeating modulation source.</div>
+<div><a href="reference.html#pulser">Pulser</a> — A timing pulse generator that fires once or repeats, Buchla</div>
+<div><a href="reference.html#quantizer">Quantizer</a> — Weighted scale quantizer from Marbles.</div>
+<div><a href="reference.html#randomsequence">RandomSequence</a> — Random values that can loop: Marbles&#x27; &quot;déjà vu&quot; control.</div>
+<div><a href="reference.html#sampleandhold">SampleAndHold</a> — Sample and Hold — captures and freezes an input on a trigger.</div>
+<div><a href="reference.html#segmentenvelope">SegmentEnvelope</a> — Peaks&#x27; multi-segment envelope: ADSR, AD, AR, looping, or custom.</div>
+<div><a href="reference.html#sequentialvoltage">SequentialVoltage</a> — A five-step sequencer, after the Buchla Easel&#x27;s sequential</div>
+<div><a href="reference.html#slewlimiter">SlewLimiter</a> — Slew limiter with independent rise and fall times.</div>
+<div><a href="reference.html#slope">Slope</a> — Tides 2 function generator: envelope, LFO or oscillator.</div>
+</div>
+<h3>Utilities</h3><div class="catalogue">
+<div><a href="reference.html#mixer">Mixer</a> — Mixer: adds up to four signals into one.</div>
+<div><a href="reference.html#multiply">Multiply</a> — Multiply: one signal times another (a VCA, depth control or</div>
+<div><a href="reference.html#param">Param</a> — Param: a value your own code sets and a patch&#x27;s cables read.</div>
+<div><a href="reference.html#range">Range</a> — Range: rescale a control signal, in a straight line or in octaves.</div>
+</div>
+<h3>Dynamics</h3><div class="catalogue">
+<div><a href="reference.html#compressor">Compressor</a> — RMS feed-forward compressor with sidechain, from Streams.</div>
+<div><a href="reference.html#follower">Follower</a> — Envelope follower that also tracks brightness (Rings).</div>
+<div><a href="reference.html#lowpassgate">LowPassGate</a> — Low Pass Gate (LPG) — combined VCA and lowpass filter on one CV.</div>
+<div><a href="reference.html#vactrol">Vactrol</a> — Detailed vactrol model from Streams: control in, gain + cutoff out.</div>
+<div><a href="reference.html#vactrollpg">VactrolLpg</a> — Plaits&#x27; low-pass gate with its vactrol envelope.</div>
+</div>
+<h3>Effects</h3><div class="catalogue">
+<div><a href="reference.html#chorus">Chorus</a> — Rings&#x27; stereo chorus: gentle, slow and wide.</div>
+<div><a href="reference.html#decimator">Decimator</a> — Anti-aliased sample-rate reducer from Plaits.</div>
+<div><a href="reference.html#delayline">DelayLine</a> — Delay line with interpolated reads for echo, chorus, and</div>
+<div><a href="reference.html#diffuser">Diffuser</a> — Clouds&#x27; stereo diffuser: four all-passes per channel.</div>
+<div><a href="reference.html#ensemble">Ensemble</a> — Rings&#x27; string-machine ensemble: a lush, shimmering chorus.</div>
+<div><a href="reference.html#fxengine">FxEngine</a> — Toolkit for delay-based effects (Clouds/Rings/Elements FxEngine).</div>
+<div><a href="reference.html#limiter">Limiter</a> — Smooth output limiter from Rings and Warps.</div>
+<div><a href="reference.html#overdrive">Overdrive</a> — Level-compensated soft-clipping overdrive from Plaits.</div>
+<div><a href="reference.html#pitchshifter">PitchShifter</a> — Clouds&#x27; delay-line pitch shifter.</div>
+<div><a href="reference.html#reverb">Reverb</a> — Stereo plate-style reverb from Rings, Elements and Clouds.</div>
+<div><a href="reference.html#springreverb">SpringReverb</a> — A two-spring tank: the drippy, boingy reverb of guitar amps and</div>
+<div><a href="reference.html#tablewavefolder">TableWavefolder</a> — Plaits&#x27; table wavefolder: sine fold and analog-circuit fold.</div>
+<div><a href="reference.html#wavefolder">WaveFolder</a> — Single-stage wave folder for west-coast/Buchla-style synthesis.</div>
+</div>
+<h3>Physical models</h3><div class="catalogue">
+<div><a href="reference.html#karplusstrong">KarplusStrong</a> — Karplus-Strong plucked string synthesis.</div>
+<div><a href="reference.html#modalresonator">ModalResonator</a> — Rings&#x27; modal resonator: struck or bowed strings, bars and bells.</div>
+<div><a href="reference.html#plucker">Plucker</a> — Rings&#x27; pick/finger exciter for StringModel and ModalResonator.</div>
+<div><a href="reference.html#stringmodel">StringModel</a> — Elements&#x27; string: Karplus-Strong with dispersion and a buzzing</div>
+<div><a href="reference.html#tube">Tube</a> — Elements&#x27; reed-and-tube wind model.</div>
+</div>
+<h3>Drums</h3><div class="catalogue">
+<div><a href="reference.html#analogkick">AnalogKick</a> — TR-808 bass drum circuit model, from Plaits.</div>
+<div><a href="reference.html#analogsnare">AnalogSnare</a> — TR-808 snare drum circuit model (extended), from Plaits.</div>
+<div><a href="reference.html#fmdrum">FmDrum</a> — Peaks&#x27; FM drum: sine drum with pitch envelopes, noise and drive.</div>
+<div><a href="reference.html#hihat">HiHat</a> — TR-808 hi-hat, plus a ring-modulated variant, from Plaits.</div>
+<div><a href="reference.html#synthkick">SynthKick</a> — TR-909-style digital kick, from Plaits.</div>
+<div><a href="reference.html#synthsnare">SynthSnare</a> — TR-909 snare drum model, from Plaits.</div>
+</div>
+<h3>Spectral</h3><div class="catalogue">
+<div><a href="reference.html#fmoperators">FmOperators</a> — DX-style 4- or 6-operator FM voice (Plaits&#x27; FM engine).</div>
+<div><a href="reference.html#xmod">Xmod</a> — Warps&#x27; cross-modulation algorithms for combining two signals.</div>
+</div>
+<!-- /CATALOGUE -->
+</section>
+
+</div>
+<footer>BuddhaBox TUI. Modules derived from Mutable Instruments
+firmware are Copyright Emilie Gillet, MIT licence.</footer>
+</body>
+</html>

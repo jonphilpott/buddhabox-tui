@@ -1,0 +1,519 @@
+/**
+ * @file main.cpp
+ * @brief A 303-style acid bass line: a 16-step sequence with accents and
+ *        slides through a resonant MS-20 or ladder filter, edited from
+ *        the menu and eight knobs. Ported from buddhabox-framework's
+ *        examples/acid.
+ *
+ * THE VOICE (the TB-303's signal path):
+ *
+ *   saw/square ─► low-pass ─► VCA ─► overdrive ─► delay ─► spring ─► out
+ *                  ▲    ▲              ▲
+ *        cutoff ───┘    │              └── gate: on for half a step,
+ *        + env mod × filter envelope       held through a slide
+ *        + accent
+ *        + chaos (resonance too)
+ *
+ * - The filter is an MS-20 (Ms20Filter) by default: its resonance
+ *   keeps the bass. The Filter item switches to the Moog ladder
+ *   (MoogFilter), whose bass thins as the resonance goes up.
+ * - The filter envelope jumps up on every note and decays: that sweep
+ *   is the "squelch". Env Mod sets how far it opens the filter; Decay
+ *   how fast it closes.
+ * - An accented step is louder and opens the filter further.
+ * - A slide holds the gate into the next step and glides the pitch
+ *   there, without re-striking the filter envelope: the 303's legato
+ *   "wow".
+ * - Chaos: a Lorenz attractor (mod/lorenz.h) wanders the cutoff (up to
+ *   two octaves either way) and the resonance, as on noisebox. Chaos
+ *   Rate runs from about one loop a minute to about 5 a second: slow
+ *   sweeps for trance and acid, never a buzz.
+ *
+ * THE EFFECTS: a tempo-synced echo (3/16, the dotted eighth, by
+ * default: each repeat lands off the beat), its repeats darkened by a
+ * low-pass in the feedback path like a tape or analog delay; then the
+ * spring reverb, which also spreads the mono voice into stereo.
+ *
+ * THE SEQUENCE: notes come from a Colour, a five-note just scale with
+ * 16 flavours from dark to bright (mod/colour.h). Randomize rolls a new
+ * 16-step melody over two octaves, plus random accents, slides, rests
+ * and octave jumps. Changing Colour keeps the melody and re-tunes it;
+ * so does Root, the bottom note of the scale (C1 to C3, A1 at first).
+ * Random is the noisebox's "Turing machine": on each step, the chance
+ * of rewriting the step about to play (its note, accent, slide and
+ * rest). At 0 the bar repeats forever; at 100 every step is new.
+ *
+ * THE MENU (Menu in bbtui/menu.h does the work):
+ *   up/down       move between items
+ *   left/right    change the highlighted value (shown as <value>)
+ *   space on Randomize   roll a new sequence
+ *
+ * THE PANEL:
+ *   knobs 0-7     Cutoff, Resonance, Env Mod, Decay, Accent, Drive,
+ *                 Chaos, Delay Mix. A knob and its menu item are the
+ *                 same setting: moving either moves the other.
+ *   switch 0 (1)  Randomize
+ *   MIDI          a note between C1 and C3 sets Root: play the bass
+ *                 line's key from a keyboard
+ *
+ * Differences from the board version: the menu also moves the knobs
+ * (real pots can't move themselves), and the echo holds 2 s, so long
+ * Delay Times at slow tempos are no longer cut short.
+ */
+
+#include "bbtui/menu.h"
+#include "bbtui/tui.h"
+#include "buddhabox/core/dsp_common.h"
+#include "buddhabox/core/midi_utils.h"
+#include "buddhabox/core/random.h"
+#include "buddhabox/filter/moog_filter.h"
+#include "buddhabox/filter/ms20_filter.h"
+#include "buddhabox/fx/delay.h"
+#include "buddhabox/fx/overdrive.h"
+#include "buddhabox/fx/spring_reverb.h"
+#include "buddhabox/mod/clock.h"
+#include "buddhabox/mod/colour.h"
+#include "buddhabox/mod/envelope.h"
+#include "buddhabox/mod/lorenz.h"
+#include "buddhabox/osc/basic.h"
+
+using namespace bb;
+
+// ── Settings ─────────────────────────────────────────────────────────
+const int kSteps = 16;             // one bar of sixteenth notes
+const float kGlideSeconds = 0.06f; // a 303 slide takes about 60 ms
+const int kFilterEvery = 8;        // samples between cutoff updates (see below)
+
+// ── The menu ─────────────────────────────────────────────────────────
+// Menu (bbtui/menu.h) does the scrolling, editing and drawing; this file
+// only lists the items. The voice reads their values in applyMenu().
+enum Item {
+  TEMPO,
+  CUTOFF,
+  RESONANCE,
+  ENV_MOD,
+  DECAY,
+  ACCENT,
+  DRIVE,
+  WAVE,
+  FILTER,
+  ROOT,
+  COLOUR,
+  RANDOM,
+  CHAOS,
+  CHAOS_RATE,
+  DELAY_TIME,
+  DELAY_MIX,
+  FEEDBACK,
+  REVERB,
+  RANDOMIZE, // an action, not a value
+  kItems
+};
+
+const char *const kWaves[] = {"Saw", "Square"};
+const char *const kFilters[] = {"Ladder", "MS-20"};
+
+// Root is a MIDI note, C1 to C3: two octaves of bass, shown by name.
+// setup() writes the names ("C1", "C#1" ... "C3") into noteText and
+// points noteNames at them, so the menu can show labels[value - min].
+const int kLowNote = NOTE_C1, kHighNote = NOTE_C3;
+const int kNotes = kHighNote - kLowNote + 1; // 25
+char noteText[kNotes][4];
+const char *noteNames[kNotes];
+
+MenuItem items[kItems] = {
+    {"Tempo", 125, 60, 200, 1},
+    {"Cutoff", 30, 0, 100, 2},
+    {"Resonance", 75, 0, 100, 2},
+    {"Env Mod", 60, 0, 100, 2},
+    {"Decay", 40, 0, 100, 2},
+    {"Accent", 60, 0, 100, 2},
+    {"Drive", 30, 0, 100, 2},
+    {"Wave", 0, 0, 1, 1, kWaves},
+    {"Filter", 1, 0, 1, 1, kFilters},
+    {"Root", NOTE_C1 + 9, kLowNote, kHighNote, 1, noteNames}, // A1, 55 Hz
+    {"Colour", 6, 0, 15, 1},
+    {"Random", 0, 0, 100, 2},
+    {"Chaos", 0, 0, 100, 2},
+    {"Chaos Rate", 40, 0, 100, 2},
+    {"Delay Time", 3, 1, 6, 1, nullptr,
+     "/16"}, // in sixteenths: 3 = dotted eighth
+    {"Delay Mix", 30, 0, 100, 2},
+    {"Feedback", 45, 0, 90, 2},
+    {"Reverb", 25, 0, 100, 2},
+    {"Randomize"}, // step 0: an action
+};
+Menu menu(items, kItems);
+
+// ── The knobs ────────────────────────────────────────────────────────
+// Knob n drives menu item kKnobItems[n]: the table is all there is to
+// change to move a setting to another knob.
+const int kKnobItems[] = {CUTOFF, RESONANCE, ENV_MOD, DECAY,
+                          ACCENT, DRIVE,     CHAOS,   DELAY_MIX};
+const int kKnobCount = sizeof(kKnobItems) / sizeof(kKnobItems[0]);
+float lastKnob[kKnobCount]; // each knob's last reading, to spot moves
+
+/** @return  Item `i`'s value as a 0-1 knob position. */
+float knobPosition(int i) {
+  const MenuItem &m = items[i];
+  return (float)(m.value - m.min) / (float)(m.max - m.min);
+}
+
+// ── Modules ──────────────────────────────────────────────────────────
+BasicOscillator osc;
+MoogFilter ladder;
+Ms20Filter ms20;
+bool useMs20 = true; // the Filter item
+Envelope ampEnv, filterEnv;
+Overdrive drive;
+// 2 s of 16-bit storage (172 KB): every Delay Time at every tempo
+// fits, the longest being 6/16 at 60 BPM, 1.5 s. The board's 64 KB
+// held 0.74 s.
+const float kEchoMax = 88198.0f;
+DelayLine<88200> echo;
+SpringReverb<> spring;
+TempoClock tempo(125.0f, 4); // 4 ticks a beat: sixteenth notes
+Colour colour;
+// Runs once per cutoff update (kFilterEvery samples), not every sample:
+// an eighth of the cost, and still far faster than the fastest wobble.
+Lorenz chaos;
+// Shared by randomize() in loop() and Random in the interrupt. If one
+// interrupts the other mid-draw, two numbers may come out the same:
+// harmless here.
+LFSR rng(303);
+
+// ── The sequence ─────────────────────────────────────────────────────
+// Written by randomize() in loop() and read by the audio interrupt.
+// Each entry is a single byte or bool, which the processor writes in
+// one go, so the interrupt never sees half a value. At worst one step
+// plays half old, half new, the moment you press Randomize.
+uint8_t notes[kSteps]; // scale index: 0-4 first octave, 5-9 next...
+bool accents[kSteps], slides[kSteps], rests[kSteps];
+
+// ── Voice settings, from the menu ────────────────────────────────────
+// Floats are written in one instruction too, so the same goes for
+// these: loop() writes them, the audio interrupt reads them.
+float cutoffSemis = 0.0f; // the knob's base cutoff, semitones over 40 Hz
+// The cutoff pot's exact position, 0-1, or -1 when the menu set the
+// cutoff last. Finer than the menu's 0-100 steps, so a slow turn sweeps
+// smoothly instead of in 0.72-semitone jumps.
+float cutoffFine = -1.0f;
+float envModSemis = 0.0f; // how far the envelope opens it
+float accentAmount = 0.0f;
+float resonance = 0.0f;
+float chaosAmount = 0.0f;  // Chaos, 0-1
+float randomChance = 0.0f; // Random, 0-1
+
+// ── Playback state (audio interrupt only, except `step` for display)
+volatile int step = kSteps - 1; // so the first tick plays step 0
+uint32_t gateSamples = 0;       // samples left until the gate closes
+bool accentNow = false;         // is the sounding note accented?
+float pitchHz = 55.0f;          // where the oscillator is now...
+float targetHz = 55.0f;         // ...and where it's heading
+float glideCoefficient = 0.0f;
+float echoSamples = 0.0f; // the delay time, from Tempo and Delay Time
+float echoMix = 0.0f, echoFeedback = 0.0f;
+float echoTone = 0.0f; // the feedback low-pass's state
+int filterCounter = 0;
+
+/**
+ * Roll one step's accent, slide and rest. Used by randomize() and by
+ * Random in the interrupt, so both scatter them the same way.
+ * @param i  The step, 0 to kSteps - 1
+ */
+void rollStep(int i) {
+  accents[i] = rng.nextFloat() < 0.25f;
+  slides[i] = rng.nextFloat() < 0.2f;
+  // Step 0 always plays, so the bar has an anchor.
+  rests[i] = i > 0 && rng.nextFloat() < 0.15f;
+}
+
+/**
+ * Roll a new sequence: a Colour melody over two octaves, then accents,
+ * slides, rests and octave jumps scattered over it.
+ */
+void randomize() {
+  colour.newMelody(&rng, 9); // indices 0..9: two octaves of the scale
+  for (int i = 0; i < kSteps; i++) {
+    uint8_t n = colour.getMelody(i);
+    // An octave jump now and then: the 303's yelping leaps.
+    if (n < 5 && rng.nextFloat() < 0.2f)
+      n += 5;
+    notes[i] = n;
+    rollStep(i);
+  }
+}
+
+/**
+ * Turn the menu's numbers into the voice's settings. Called from loop()
+ * after any change; uses library maths, so control rate only.
+ */
+void applyMenu() {
+  tempo.setBPM((float)items[TEMPO].value);
+  // Cutoff: 40 Hz to about 2.6 kHz over the knob (six octaves), before
+  // the envelope adds its sweep on top.
+  cutoffSemis =
+      cutoffFine >= 0.0f ? 72.0f * cutoffFine : 0.72f * items[CUTOFF].value;
+  // Env Mod: up to four more octaves at the envelope's peak.
+  envModSemis = 0.48f * items[ENV_MOD].value;
+  // Resonance stops short of 1.0, where both filters ring on their own.
+  // The interrupt sets it on the filters, with the chaos added.
+  resonance = 0.0096f * items[RESONANCE].value;
+  useMs20 = items[FILTER].value;
+  // Decay: 0.1 to 2 seconds, squared so the short, snappy settings get
+  // more of the range.
+  float d = items[DECAY].value / 100.0f;
+  filterEnv.setRelease(0.1f + 1.9f * d * d);
+  accentAmount = items[ACCENT].value / 100.0f;
+  drive.setDrive(items[DRIVE].value / 100.0f);
+  osc.setShape(items[WAVE].value ? BasicOscillator::SQUARE
+                                 : BasicOscillator::SAW);
+  colour.setColour(COLOUR_BY_BRIGHTNESS[items[COLOUR].value]);
+  // Root: a whole MIDI note, so it always lands on a semitone. The
+  // next note played picks it up.
+  colour.setRoot(midiToFreq((uint8_t)items[ROOT].value)); // control rate
+  // Echo: a number of sixteenth notes at the current tempo.
+  float sixteenth = SAMPLE_RATE * 60.0f / (items[TEMPO].value * 4.0f);
+  echoSamples = minf(sixteenth * items[DELAY_TIME].value, kEchoMax);
+  echoMix = items[DELAY_MIX].value / 100.0f;
+  echoFeedback = items[FEEDBACK].value / 100.0f;
+  spring.setAmount(items[REVERB].value / 100.0f);
+  randomChance = items[RANDOM].value / 100.0f;
+  chaosAmount = items[CHAOS].value / 100.0f;
+  // Lorenz rate 0.30 to 0.55: about 0.02 to 4.8 loops a second at this
+  // update rate (measured on the host over two minutes each). The
+  // rate is exponential, so each step of the menu speeds the loops up
+  // by the same ratio, as a tempo knob would.
+  chaos.setRate(0.30f + 0.25f * items[CHAOS_RATE].value / 100.0f);
+}
+
+/** Start the next step of the sequence (audio interrupt). */
+void nextStep() {
+  int s = (step + 1) % kSteps;
+  // Random: maybe rewrite this step before it plays. A slide on the
+  // step before still glides into whatever note lands here.
+  if (rng.nextFloat() < randomChance) {
+    notes[s] = (uint8_t)rng.nextRange(0, 9);
+    rollStep(s);
+  }
+  step = s;
+  int previous = (s + kSteps - 1) % kSteps;
+  // A slide on the previous step means its gate is still open: glide
+  // into this note instead of striking it.
+  bool sliding = slides[previous] && !rests[previous];
+
+  // The gate stays open half a step, or the whole step if this one
+  // slides into the next.
+  float samplesPerStep = SAMPLE_RATE * 60.0f / (tempo.getBPM() * 4.0f);
+  if (rests[s]) {
+    ampEnv.gate(false);
+    gateSamples = 0;
+    return;
+  }
+  // A sliding gate runs a little past the next tick, so it can't close
+  // a sample before the next step holds it open.
+  gateSamples = slides[s] ? (uint32_t)samplesPerStep + 64
+                          : (uint32_t)(samplesPerStep * 0.5f);
+  targetHz = colour.getNote(0, notes[s]);
+
+  if (!sliding) {
+    // A fresh note: jump to the pitch, strike both envelopes.
+    pitchHz = targetHz;
+    accentNow = accents[s];
+    ampEnv.gate(true);
+    filterEnv.trigger();
+  }
+}
+
+/** Fill one block of audio (audio thread: no printing, no waiting). */
+void audioCallback(const float *in, float *out, int frames) {
+  for (int i = 0; i < frames; i++) {
+    // 1. Sequencer: a tick starts a step; the gate closes on time.
+    if (tempo.process())
+      nextStep();
+    if (gateSamples > 0 && --gateSamples == 0)
+      ampEnv.gate(false);
+
+    // 2. Pitch, gliding towards the target (a jump when not sliding,
+    //    because nextStep() already set pitchHz = targetHz).
+    pitchHz += glideCoefficient * (targetHz - pitchHz);
+    osc.setFrequency(pitchHz);
+
+    // 3. Envelopes.
+    float amp = ampEnv.process();
+    float fenv = filterEnv.process();
+    float accent = accentNow ? accentAmount : 0.0f;
+
+    // 4. Cutoff. setFrequency() uses expf() or tanf(), too slow for
+    //    every sample, so it runs every kFilterEvery samples: 5.5 kHz,
+    //    still far quicker than the fastest sweep. The cutoff adds up
+    //    in semitones (base + envelope + accent), which matches how
+    //    the ear hears a sweep. Chaos adds up to two octaves either
+    //    way to the cutoff, and moves the resonance with the Lorenz's
+    //    y, which leads x: the two never move quite together.
+    if (++filterCounter >= kFilterEvery) {
+      filterCounter = 0;
+      chaos.process();
+      float semis = cutoffSemis + (envModSemis + 24.0f * accent) * fenv +
+                    24.0f * chaosAmount * chaos.x();
+      float hz = 40.0f * semitonesToRatio(semis);
+      float res =
+          clampf(resonance + 0.4f * chaosAmount * chaos.y(), 0.0f, 0.96f);
+      if (useMs20) {
+        ms20.setResonance(res);
+        ms20.setFrequency(hz);
+      } else {
+        ladder.setResonance(res);
+        ladder.setFrequency(hz);
+      }
+    }
+
+    // 5. Oscillator, filter, VCA (an accent adds up to 80% level),
+    //    then overdrive for grit.
+    float x = osc.process();
+    x = useMs20 ? ms20.process(x) : ladder.process(x);
+    x *= amp * (0.6f + 0.8f * accent);
+    x = drive.process(x);
+
+    // 6. Echo. The repeats go back in through a low-pass, so each one
+    //    is darker than the last. The voice is kept a little under full
+    //    scale so the 16-bit buffer's clamp at ±1 is rarely reached.
+    float wet = echo.read(echoSamples);
+    echoTone += 0.35f * (wet - echoTone);
+    echo.write(0.7f * x + echoFeedback * echoTone);
+    x += echoMix * wet;
+
+    // 7. Spring reverb: mono in, stereo out.
+    float left = x, right = x;
+    spring.process(left, right);
+
+    // 8. Out, through a soft limiter: the resonant, overdriven bass
+    //    can pass full scale, and this rounds the peaks off instead of
+    //    clipping them flat.
+    out[2 * i] = 0.92f * softLimitClip(left);
+    out[2 * i + 1] = 0.92f * softLimitClip(right);
+  }
+}
+
+/**
+ * Draw one frame. The yellow top band (rows 0-15 on two-colour panels)
+ * holds the title and the sequence; the blue rest holds the menu.
+ */
+void drawScreen() {
+  Oled &oled = tui::display();
+  // 1. Title bar: name and tempo, dark on lit.
+  oled.rect(0, 0, 128, 8, true);
+  int x = oled.text(2, 0, "ACID  ", false);
+  x = oled.number(x, 0, (float)items[TEMPO].value, 0, false);
+  oled.text(x, 0, " bpm ", false);
+
+  // 2. The sequence: a filled box per accented note, an outline per
+  //    plain one, a dot per rest, and a line under the playing step.
+  oled.rect(0, 8, 128, 8, true, false);
+  int playing = step;
+  for (int i = 0; i < kSteps; i++) {
+    int cx = i * 8;
+    if (rests[i])
+      oled.rect(cx + 3, 11, 2, 2, true);
+    else
+      oled.rect(cx + 1, 8, 6, 6, accents[i]);
+    if (slides[i] && !rests[i])
+      oled.rect(cx + 7, 11, 1, 1, true); // a tail: slides on
+    if (i == playing)
+      oled.rect(cx + 1, 15, 6, 1, true);
+  }
+
+  // 3. The menu: six rows under the yellow band.
+  menu.draw(oled, 16, 6);
+}
+
+void setup() {
+  tui::setTitle("ACID");
+  tui::setSwitch(0, "Rndmz", true);
+  for (int k = 0; k < kKnobCount; k++) {
+    tui::setKnob(k, items[kKnobItems[k]].name, knobPosition(kKnobItems[k]));
+    lastKnob[k] = tui::knob(k);
+  }
+
+  // Voice: a short click-free attack on both envelopes; the amp
+  // envelope closes quickly when the gate drops.
+  ampEnv.setAttack(0.003f);
+  ampEnv.setRelease(0.02f);
+  filterEnv.setAttack(0.002f);
+  // One-pole glide: the coefficient that covers most of the way to the
+  // target in kGlideSeconds (library maths: once, here).
+  spring.setTime(0.6f); // a medium splash, not a wash
+  spring.setTone(0.5f);
+  chaos.init(SAMPLE_RATE / kFilterEvery); // see the Lorenz's note
+  glideCoefficient = 1.0f - expf(-3.0f / (kGlideSeconds * SAMPLE_RATE));
+  static const char *const kNames[12] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                         "F#", "G",  "G#", "A",  "A#", "B"};
+  for (int n = 0; n < kNotes; n++) {
+    int midi = kLowNote + n;
+    // MIDI 24 is C1: octave = note / 12 - 1.
+    snprintf(noteText[n], sizeof(noteText[n]), "%s%d", kNames[midi % 12],
+             midi / 12 - 1);
+    noteNames[n] = noteText[n];
+  }
+  applyMenu();
+  randomize();
+
+  Midi::begin();
+  AudioEngine::begin();
+}
+
+void loop() {
+  // 1. Knobs. A knob that moved sets its menu item, so the screen shows
+  //    where it is.
+  bool moved = false;
+  for (int k = 0; k < kKnobCount; k++) {
+    float v = tui::knob(k);
+    if (v == lastKnob[k])
+      continue;
+    lastKnob[k] = v;
+    MenuItem &m = items[kKnobItems[k]];
+    m.value = m.min + (int)(v * (m.max - m.min) + 0.5f);
+    if (kKnobItems[k] == CUTOFF)
+      cutoffFine = v;
+    moved = true;
+  }
+  if (moved)
+    applyMenu();
+
+  // 2. Menu: hand it the arrow keys and the space bar. A change to a
+  //    knob's item moves the knob too.
+  Menu::Event event =
+      menu.update(tui::menuMove(), tui::menuAdjust(), tui::menuPressed());
+  if (event == Menu::CHANGED) {
+    int item = menu.selected();
+    if (item == CUTOFF)
+      cutoffFine = -1.0f; // the menu has the cutoff now
+    for (int k = 0; k < kKnobCount; k++) {
+      if (kKnobItems[k] == item) {
+        tui::setKnob(k, items[item].name, knobPosition(item));
+        lastKnob[k] = tui::knob(k);
+      }
+    }
+    applyMenu();
+  } else if (event == Menu::ACTION && menu.selected() == RANDOMIZE) {
+    randomize();
+  }
+  if (tui::switchPressed(0))
+    randomize();
+
+  // 3. MIDI: a note in range sets Root.
+  Midi::Message m;
+  while (Midi::read(m)) {
+    if (m.isNoteOn() && m.data1 >= kLowNote && m.data1 <= kHighNote) {
+      items[ROOT].value = m.data1;
+      applyMenu();
+    }
+  }
+
+  // 4. Display: redraw at 20 frames a second.
+  static uint32_t lastFrame = 0;
+  if (tui::millis() - lastFrame >= 50) {
+    lastFrame = tui::millis();
+    drawScreen();
+  }
+}
