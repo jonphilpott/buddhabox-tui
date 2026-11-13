@@ -86,7 +86,9 @@ void render(float *out) {
   if (now > peak.load())
     peak.store(now);
 
-  // 3. The oscilloscope gets the mono mix.
+  // 3. The recorder (if on) gets the block; the oscilloscope gets the
+  //    mono mix.
+  detail::recordPush(out, kBlock);
   uint32_t n = detail::scopeWritten.load(std::memory_order_relaxed);
   for (int i = 0; i < kBlock; i++)
     detail::scope[(n + i) % detail::SCOPE_SIZE] =

@@ -10,7 +10,7 @@ What it writes into the new folder:
                  from
     Makefile     builds main.cpp with this checkout's library into a
                  program named after the folder
-    .gitignore   ignores that program
+    .gitignore   ignores that program and its recordings
 
 HOW THE LINK WORKS: the Makefile's BBTUI line points at this checkout.
 Its headers and .cpp files are compiled straight from there, so changes
@@ -97,7 +97,7 @@ def main():
     with open(os.path.join(target, "Makefile"), "w") as f:
         f.write(MAKEFILE.format(name=name, bbtui=bbtui))
     with open(os.path.join(target, ".gitignore"), "w") as f:
-        f.write("%s\n.DS_Store\n" % name)
+        f.write("%s\n*.wav\n.DS_Store\n" % name)
     shutil.copy(os.path.join(EXAMPLES, args.example, "main.cpp"),
                 os.path.join(target, "main.cpp"))
 

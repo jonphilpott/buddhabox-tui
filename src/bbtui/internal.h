@@ -1,8 +1,8 @@
 /**
  * @file internal.h
  * @brief What the library's own .cpp files share, and programs needn't
- *        see: the oscilloscope's sample history and the MIDI activity
- *        count.
+ *        see: the oscilloscope's sample history, the MIDI activity
+ *        count, and the WAV recorder (recorder.cpp).
  */
 
 #pragma once
@@ -29,6 +29,28 @@ extern std::atomic<uint32_t> scopeWritten;
 
 /** Every MIDI message received, counted, for the panel's MIDI light. */
 extern std::atomic<uint32_t> midiCount;
+
+/** Audio thread: queue a block of output for the recorder, if it is
+ *  recording. Interleaved stereo, `frames` frames. */
+void recordPush(const float *out, int frames);
+
+/** Main thread: start a new file named after `title`, or finish the
+ *  one being recorded. */
+void recordToggle(const char *title);
+
+/** Main thread, every loop: write queued samples to the file. */
+void recordUpdate();
+
+/** Main thread, on exit: finish the file if one is open. */
+void recordEnd();
+
+/**
+ * Main thread: what is being recorded.
+ * @param seconds  Filled with the length so far
+ * @param name     Filled with the file name
+ * @return         false when not recording
+ */
+bool recordInfo(float &seconds, const char *&name);
 
 } // namespace detail
 } // namespace bb

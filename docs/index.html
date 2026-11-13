@@ -207,8 +207,33 @@ on it), an oscilloscope of the output, and one page of controls.</p>
   <tr><td>Up, down</td><td>Menu: move the highlight</td></tr>
   <tr><td>Left, right</td><td>Menu: change the highlighted value</td></tr>
   <tr><td>Space</td><td>Menu: run an action item</td></tr>
-  <tr><td>Ctrl-C</td><td>Quit</td></tr>
+  <tr><td>Ctrl-R</td><td>Start recording to a new WAV file; again to
+    stop</td></tr>
+  <tr><td>Ctrl-C</td><td>Quit (finishing any recording)</td></tr>
 </table>
+
+<h3>Recording</h3>
+<p>Ctrl-R records the output, exactly as the sound card gets it, to a
+new WAV file in the current folder; Ctrl-R again finishes it. While it
+records, the title bar shows a flashing red dot, the time recorded and
+the file's name; afterwards, the status line says what was saved. Each
+recording is a new file, named after the program and the time:
+<code>acid-20261113-101500.wav</code>, with <code>-2</code> added if two
+start in the same second. Files are 16-bit PCM, 44.1 kHz, stereo,
+clipped at full scale as the sound card would.</p>
+<div class="flow">
+  <span class="node">audioCallback()<small>audio thread</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">queue<small>lock-free, 1.5 s</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node">main thread<small>between loop() calls</small></span>
+  <span class="arrow">&rarr;</span>
+  <span class="node out">.wav file</span>
+</div>
+<p class="flow-caption">The audio thread never waits for the disk: it
+copies each block into a queue, and the main thread writes it out. If
+the main thread stalls for over 1.5 s, samples are lost, and the status
+line says how many.</p>
 
 <h3>LEDs</h3>
 <p>Sixteen indicators for the program to use as it likes. Each takes a

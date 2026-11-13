@@ -34,6 +34,7 @@
  *   rows 24-26  the page's 10 knobs: label, bar, keys and value
  */
 
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -310,6 +311,8 @@ void handleCsi(const std::string &params, char final) {
   case 'u':
     if (ctrl && code == 'c')
       quit = 1;
+    else if (ctrl && code == 'r' && event == PRESS)
+      detail::recordToggle(title);
     else if (!ctrl)
       handleKey(code, shift, event);
     return;
@@ -331,6 +334,9 @@ void readKeys() {
     unsigned char c = pending[i];
     if (c == 0x03) { // Ctrl-C in an ordinary terminal
       quit = 1;
+      i++;
+    } else if (c == 0x12) { // Ctrl-R: start or stop recording
+      detail::recordToggle(title);
       i++;
     } else if (c == 0x1b) {
       // An escape sequence: "ESC [ params final" or "ESC O letter" (the
@@ -468,9 +474,23 @@ std::string titleBar() {
   s += ' ';
   field(s, title, 12);
   s += ' ';
-  const char *help = "up/dn item  lt/rt value  ^C quit";
+  const char *help = "up/dn item lt/rt value ^R rec ^C quit";
+  // While recording, a flashing red dot, the length so far and the
+  // file name take the place of the help and status. ESC [ 31 m is
+  // red; 39 m goes back to the default colour.
+  float seconds;
+  const char *file;
   bool fresh = statusText[0] && now() - statusTime < 5000;
-  field(s, fresh ? statusText : help, 39);
+  if (detail::recordInfo(seconds, file)) {
+    s += (now() / 500) % 2 ? "\x1b[31m\u25CF\x1b[39m" : " ";
+    char rec[64];
+    snprintf(rec, sizeof(rec), " REC %d:%04.1f %s", (int)seconds / 60,
+             fmodf(seconds, 60.0f), file);
+    field(s, rec, 37);
+  } else {
+    field(s, fresh ? statusText : help, 38);
+  }
+  s += ' '; // a gap, however long the text
   pageField(s);
   s += ' ';
 
@@ -869,6 +889,7 @@ int main() {
     tick((t - lastTick) / 1000.0f);
     lastTick = t;
     ::loop();
+    detail::recordUpdate(); // write recorded audio to disk
 
     // 2. A new frame every 33 ms: 30 a second.
     if (t - lastFrame >= 33) {
@@ -880,6 +901,7 @@ int main() {
   }
 
   AudioEngine::end();
+  detail::recordEnd(); // after the audio stops: nothing more can arrive
   terminalEnd();
   return 0;
 }

@@ -30,6 +30,8 @@
  *   up/down                 the menu: move the highlight
  *   left/right              the menu: change the highlighted value
  *   space                   the menu: run an action item
+ *   Ctrl-R                  start recording the output to a new WAV
+ *                           file; again to stop (see recorder.cpp)
  *   Ctrl-C                  quit
  *
  * THREADS: loop() and audioCallback() run at the same time on different

@@ -50,7 +50,11 @@ knob 12 is page 2's `d`/`c`, and switch 25 is page 2's `6`.
 - Up/down: move through the menu
 - Left/right: change the highlighted value (hold to sweep)
 - Space: run an action item, such as Randomize
-- Ctrl-C: quit
+- Ctrl-R: start recording the output to a new WAV file; Ctrl-R again
+  to stop. The title bar shows a red dot and the time recorded. Files
+  go in the current folder, named after the program and the time
+  (`acid-20261113-101500.wav`): 16-bit, 44.1 kHz, stereo.
+- Ctrl-C: quit (a recording in progress is finished and saved)
 
 Most terminals only report a key going down, not coming up. In those,
 a momentary switch lights for 150 ms per press, and holding a knob key
