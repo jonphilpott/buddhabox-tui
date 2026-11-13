@@ -109,21 +109,36 @@ namespace AudioEngine {
  * 44.1 kHz, stereo, in blocks of 256 frames. The operating system
  * converts to the device's own rate if it differs.
  *
- * On Linux it uses ALSA's "default" device; set BB_AUDIO_OUT or
- * BB_AUDIO_IN to another ALSA name to choose, for example
- * BB_AUDIO_OUT=plughw:1 for a USB card on a Raspberry Pi.
+ * CHOOSING DEVICES. On Linux it uses ALSA's "default" device; set
+ * BB_AUDIO_OUT or BB_AUDIO_IN to another ALSA name, for example
+ * BB_AUDIO_IN=plughw:1 for a USB interface. On macOS output goes to the
+ * system's output, and BB_AUDIO_IN picks an input by part of its name
+ * (BB_AUDIO_IN=zoom). `./program --devices` lists the inputs.
  *
- * @param input  true to open the default input as well. On macOS the
- *               first run asks for microphone permission for your
- *               terminal app. Off by default, so synths don't ask.
- * @return       true if the output started. The panel's status line
- *               says what failed if not.
+ * CHOOSING INPUT CHANNELS. `left` and `right` pick which of the
+ * device's channels become the program's stereo input, counting from 1
+ * as on an interface's panel. One channel alone is mono, sent to both
+ * sides. The environment variable BB_AUDIO_IN_CHANNELS ("3" or "3,4")
+ * overrides them, so one line in a shell profile can serve every
+ * program. The status line shows what was opened: "input: ZOOM L6, 3".
+ *
+ * @param input  true to open the input as well. On macOS the first run
+ *               asks for microphone permission for your terminal app.
+ *               Off by default, so synths don't ask.
+ * @param left   The device channel for the left input, from 1; 0 (the
+ *               default) for the device's first two channels
+ * @param right  The device channel for the right input; 0 for the same
+ *               as `left`
+ * @return       true if the output started. The status line says what
+ *               failed if not, or if the input failed.
  *
  * Example:
- *   AudioEngine::begin();      // output only
- *   AudioEngine::begin(true);  // output and input
+ *   AudioEngine::begin();            // output only
+ *   AudioEngine::begin(true);        // and input channels 1 and 2
+ *   AudioEngine::begin(true, 3);     // and input 3, mono
+ *   AudioEngine::begin(true, 3, 4);  // and inputs 3 and 4, stereo
  */
-bool begin(bool input = false);
+bool begin(bool input = false, int left = 0, int right = 0);
 
 /**
  * @return  The share of each block's time spent in audioCallback(),

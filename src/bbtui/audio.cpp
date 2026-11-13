@@ -23,6 +23,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "bbtui/internal.h"
@@ -47,6 +49,53 @@ Ring<float, 8 * 2 * AUDIO_BLOCK_SIZE> inputQueue;
 
 std::atomic<float> load{0.0f}, peak{0.0f};
 std::atomic<bool> running{false};
+
+// THE INPUT CHANNELS. The device is opened with `inOpen` channels, and
+// the input callback picks two of them, `inLeft` and `inRight`
+// (counting from 0), as the program's stereo input. -1 means the
+// program didn't choose: use the device's first two, or its only one.
+int inLeft = -1, inRight = -1, inOpen = 2;
+
+/**
+ * Note which channels the program asked for (counting from 1, as on an
+ * interface's front panel). BB_AUDIO_IN_CHANNELS, "3" or "3,4",
+ * overrides the program, so one setting in a shell profile serves
+ * every program.
+ */
+void chooseChannels(int left, int right) {
+  if (const char *e = getenv("BB_AUDIO_IN_CHANNELS")) {
+    left = atoi(e);
+    const char *comma = strchr(e, ',');
+    right = comma ? atoi(comma + 1) : 0;
+  }
+  if (left < 1) // not chosen
+    return;
+  if (right < 1) // one channel: mono, to both sides
+    right = left;
+  inLeft = left - 1;
+  inRight = right - 1;
+}
+
+/**
+ * The status line's report on the input, e.g. "input: ZOOM L6, 3" or
+ * "input: plughw:1, 3+4", so it's clear which channels are live.
+ */
+void reportInput(const char *device) {
+  char msg[80];
+  if (inLeft == inRight)
+    snprintf(msg, sizeof(msg), "input: %s, %d", device, inLeft + 1);
+  else
+    snprintf(msg, sizeof(msg), "input: %s, %d+%d", device, inLeft + 1,
+             inRight + 1);
+  tui::status(msg);
+}
+
+/** Push one frame of a device's input (`inOpen` interleaved channels)
+ *  to the input queue as stereo. */
+inline void pushFrame(const float *frame) {
+  inputQueue.push(frame[inLeft]);
+  inputQueue.push(frame[inRight]);
+}
 
 /**
  * Make one block of output: gather input, time the user's callback,
@@ -104,12 +153,14 @@ void render(float *out) {
 #if defined(__APPLE__)
 
 #include <AudioToolbox/AudioToolbox.h>
+#include <CoreAudio/CoreAudio.h>
+#include <string>
+#include <vector>
 
 namespace bb {
 namespace {
 
 AudioQueueRef outQueue = nullptr, inQueue = nullptr;
-int inChannels = 2;
 
 /**
  * AudioQueue calls this on its own thread when it has played a buffer
@@ -122,21 +173,17 @@ void outputCallback(void *, AudioQueueRef queue, AudioQueueBufferRef buf) {
 }
 
 /**
- * AudioQueue calls this when it has filled an input buffer. Copy the
- * samples into the queue (doubling a mono input to stereo) and hand the
- * buffer back to be filled again.
+ * AudioQueue calls this when it has filled an input buffer: every one
+ * of the device's channels, interleaved. Pick out the two in use, then
+ * hand the buffer back to be filled again.
  */
 void inputCallback(void *, AudioQueueRef queue, AudioQueueBufferRef buf,
                    const AudioTimeStamp *, UInt32,
                    const AudioStreamPacketDescription *) {
   const float *s = (const float *)buf->mAudioData;
-  int frames = buf->mAudioDataByteSize / (inChannels * sizeof(float));
-  for (int i = 0; i < frames; i++) {
-    float l = s[i * inChannels];
-    float r = inChannels == 2 ? s[i * 2 + 1] : l;
-    inputQueue.push(l);
-    inputQueue.push(r);
-  }
+  int frames = buf->mAudioDataByteSize / (inOpen * sizeof(float));
+  for (int i = 0; i < frames; i++)
+    pushFrame(s + i * inOpen);
   AudioQueueEnqueueBuffer(queue, buf, 0, nullptr);
 }
 
@@ -153,28 +200,158 @@ AudioStreamBasicDescription format(int channels) {
   return f;
 }
 
-/** Start the input queue: stereo if the device allows, else mono. */
-bool startInput() {
-  for (inChannels = 2; inChannels >= 1; inChannels--) {
-    AudioStreamBasicDescription f = format(inChannels);
-    if (AudioQueueNewInput(&f, inputCallback, nullptr, nullptr, nullptr, 0,
-                           &inQueue) == noErr)
-      break;
+// ── Devices ──────────────────────────────────────────────────────────
+// CoreAudio describes everything as "objects" with "properties", each
+// named by an address: what (the selector), which side (scope: input,
+// output or global) and which element (Main = the whole object).
+
+/** An address in the global scope. */
+AudioObjectPropertyAddress address(AudioObjectPropertySelector what) {
+  return {what, kAudioObjectPropertyScopeGlobal,
+          kAudioObjectPropertyElementMain};
+}
+
+/** A string property (a name or a UID) as UTF-8. */
+std::string stringProperty(AudioObjectID dev, AudioObjectPropertySelector p) {
+  AudioObjectPropertyAddress a = address(p);
+  CFStringRef s = nullptr;
+  UInt32 size = sizeof(s);
+  if (AudioObjectGetPropertyData(dev, &a, 0, nullptr, &size, &s) != noErr || !s)
+    return "";
+  char buf[256];
+  CFStringGetCString(s, buf, sizeof(buf), kCFStringEncodingUTF8);
+  CFRelease(s); // we own strings that a Get call hands back
+  return buf;
+}
+
+/**
+ * How many input channels a device has: the sum over its input streams
+ * (an interface may present its 12 inputs as one stream or several).
+ * 0 for an output-only device.
+ */
+int inputChannels(AudioObjectID dev) {
+  AudioObjectPropertyAddress a = {kAudioDevicePropertyStreamConfiguration,
+                                  kAudioObjectPropertyScopeInput,
+                                  kAudioObjectPropertyElementMain};
+  UInt32 size = 0;
+  if (AudioObjectGetPropertyDataSize(dev, &a, 0, nullptr, &size) != noErr ||
+      size == 0)
+    return 0;
+  // The answer is an AudioBufferList, whose length varies with the
+  // number of streams; ask its size first, then fetch it.
+  std::vector<char> mem(size);
+  AudioBufferList *list = (AudioBufferList *)mem.data();
+  if (AudioObjectGetPropertyData(dev, &a, 0, nullptr, &size, list) != noErr)
+    return 0;
+  int n = 0;
+  for (UInt32 i = 0; i < list->mNumberBuffers; i++)
+    n += list->mBuffers[i].mNumberChannels;
+  return n;
+}
+
+/** Every audio device the system knows, inputs and outputs. */
+std::vector<AudioObjectID> allDevices() {
+  AudioObjectPropertyAddress a = address(kAudioHardwarePropertyDevices);
+  UInt32 size = 0;
+  AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &a, 0, nullptr,
+                                 &size);
+  std::vector<AudioObjectID> ids(size / sizeof(AudioObjectID));
+  AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, nullptr, &size,
+                             ids.data());
+  return ids;
+}
+
+/** Lower case, for matching names whatever their capitals. */
+std::string lower(std::string s) {
+  for (char &c : s)
+    c = (char)tolower((unsigned char)c);
+  return s;
+}
+
+/**
+ * The input device: the first whose name contains BB_AUDIO_IN (any
+ * case), or the system's default input. 0 if none.
+ */
+AudioObjectID inputDevice() {
+  if (const char *want = getenv("BB_AUDIO_IN")) {
+    for (AudioObjectID d : allDevices())
+      if (inputChannels(d) > 0 &&
+          lower(stringProperty(d, kAudioObjectPropertyName))
+                  .find(lower(want)) != std::string::npos)
+        return d;
+    return 0;
   }
-  if (!inQueue)
+  AudioObjectPropertyAddress a =
+      address(kAudioHardwarePropertyDefaultInputDevice);
+  AudioObjectID d = 0;
+  UInt32 size = sizeof(d);
+  AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, nullptr, &size,
+                             &d);
+  return d;
+}
+
+/**
+ * Start the input queue.
+ *
+ * 1. Find the device and count its channels.
+ * 2. Open the queue with all of them. The input callback picks out the
+ *    two in use; asking AudioQueue for fewer channels than the device
+ *    has would leave it to decide which ones to keep (or mix).
+ * 3. Point the queue at the device by its UID, a fixed ID string, and
+ *    start it with three blocks' worth of buffers.
+ */
+bool startInput() {
+  // 1.
+  AudioObjectID dev = inputDevice();
+  int have = dev ? inputChannels(dev) : 0;
+  if (have == 0) {
+    tui::status(getenv("BB_AUDIO_IN") ? "no input matches BB_AUDIO_IN "
+                                        "(--devices lists them)"
+                                      : "no audio input");
     return false;
+  }
+  if (inLeft < 0) { // not chosen: the first two, or the only one
+    inLeft = 0;
+    inRight = have > 1 ? 1 : 0;
+  }
+  if (inLeft >= have || inRight >= have) {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "input has %d channels; asked for %d", have,
+             (inLeft > inRight ? inLeft : inRight) + 1);
+    tui::status(msg);
+    return false;
+  }
+  // 2.
+  inOpen = have;
+  AudioStreamBasicDescription f = format(have);
+  if (AudioQueueNewInput(&f, inputCallback, nullptr, nullptr, nullptr, 0,
+                         &inQueue) != noErr) {
+    tui::status("can't open the audio input");
+    return false;
+  }
+  // 3.
+  std::string uid = stringProperty(dev, kAudioDevicePropertyDeviceUID);
+  CFStringRef cfUid =
+      CFStringCreateWithCString(nullptr, uid.c_str(), kCFStringEncodingUTF8);
+  AudioQueueSetProperty(inQueue, kAudioQueueProperty_CurrentDevice, &cfUid,
+                        sizeof(cfUid));
+  CFRelease(cfUid);
   for (int i = 0; i < 3; i++) {
     AudioQueueBufferRef buf;
-    AudioQueueAllocateBuffer(inQueue, inChannels * kBlock * sizeof(float),
-                             &buf);
+    AudioQueueAllocateBuffer(inQueue, have * kBlock * sizeof(float), &buf);
     AudioQueueEnqueueBuffer(inQueue, buf, 0, nullptr);
   }
-  return AudioQueueStart(inQueue, nullptr) == noErr;
+  if (AudioQueueStart(inQueue, nullptr) != noErr) {
+    tui::status("can't start the audio input");
+    return false;
+  }
+  reportInput(stringProperty(dev, kAudioObjectPropertyName).c_str());
+  return true;
 }
 
 } // namespace
 
-bool AudioEngine::begin(bool input) {
+bool AudioEngine::begin(bool input, int left, int right) {
   // 1. Output: three buffers of one block each. While the card plays
   //    one, the next waits and we fill the third, about 17 ms in all.
   //    A null run loop means "call back on your own thread".
@@ -184,8 +361,10 @@ bool AudioEngine::begin(bool input) {
     tui::status("no audio output");
     return false;
   }
-  if (input && !startInput())
-    tui::status("no audio input");
+  if (input) {
+    chooseChannels(left, right);
+    startInput(); // reports what it opened, or why it couldn't
+  }
   // 2. Fill all three buffers before starting, so the card has sound
   //    queued from the first moment.
   for (int i = 0; i < 3; i++) {
@@ -207,6 +386,15 @@ void AudioEngine::end() {
   running = false;
 }
 
+void detail::listInputs() {
+  printf("Audio inputs (BB_AUDIO_IN=<part of the name>):\n");
+  for (AudioObjectID d : allDevices())
+    if (int n = inputChannels(d))
+      printf("  %-40s %d channel%s\n",
+             stringProperty(d, kAudioObjectPropertyName).c_str(), n,
+             n == 1 ? "" : "s");
+}
+
 } // namespace bb
 
 // ═════════════════════════════════════════════════════════════════════
@@ -224,24 +412,26 @@ snd_pcm_t *outPcm = nullptr, *inPcm = nullptr;
 std::thread outThread, inThread;
 
 /**
- * Open an ALSA device for 44.1 kHz float stereo.
+ * Open an ALSA device for 44.1 kHz float, `channels` interleaved.
  *
  * snd_pcm_set_params() does the whole hardware setup in one call. The
  * 1 (soft_resample) lets ALSA convert the rate if the card can't do
  * 44.1 kHz; 30000 us is the total buffer, about 5 blocks: short enough
  * to play live, long enough to ride out a busy moment on a Pi.
  *
- * @param envName  Environment variable naming the device, if set
- * @param stream   SND_PCM_STREAM_PLAYBACK or SND_PCM_STREAM_CAPTURE
+ * @param envName   Environment variable naming the device, if set
+ * @param stream    SND_PCM_STREAM_PLAYBACK or SND_PCM_STREAM_CAPTURE
+ * @param channels  How many channels: 2 for output; for input, enough
+ *                  to reach the highest channel in use
  */
-snd_pcm_t *openPcm(const char *envName, snd_pcm_stream_t stream) {
+snd_pcm_t *openPcm(const char *envName, snd_pcm_stream_t stream, int channels) {
   const char *name = getenv(envName);
   snd_pcm_t *pcm = nullptr;
   if (snd_pcm_open(&pcm, name ? name : "default", stream, 0) < 0)
     return nullptr;
   if (snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT,
-                         SND_PCM_ACCESS_RW_INTERLEAVED, 2, SAMPLE_RATE, 1,
-                         30000) < 0) {
+                         SND_PCM_ACCESS_RW_INTERLEAVED, channels, SAMPLE_RATE,
+                         1, 30000) < 0) {
     snd_pcm_close(pcm);
     return nullptr;
   }
@@ -273,32 +463,52 @@ void outputLoop() {
   }
 }
 
-/** The input thread: read a block, queue it, repeat. */
+// The most input channels we open: the read buffer is sized for it.
+const int kMaxIn = 32;
+
+/** The input thread: read a block of every open channel, queue the two
+ *  in use, repeat. */
 void inputLoop() {
   realtime();
-  static float buf[2 * AUDIO_BLOCK_SIZE];
+  static float buf[kMaxIn * AUDIO_BLOCK_SIZE];
   while (running) {
     snd_pcm_sframes_t n = snd_pcm_readi(inPcm, buf, kBlock);
     if (n < 0) {
       snd_pcm_recover(inPcm, (int)n, 1);
       continue;
     }
-    for (int i = 0; i < 2 * n; i++)
-      inputQueue.push(buf[i]);
+    for (int i = 0; i < n; i++)
+      pushFrame(buf + i * inOpen);
   }
 }
 
 } // namespace
 
-bool AudioEngine::begin(bool input) {
-  outPcm = openPcm("BB_AUDIO_OUT", SND_PCM_STREAM_PLAYBACK);
+bool AudioEngine::begin(bool input, int left, int right) {
+  outPcm = openPcm("BB_AUDIO_OUT", SND_PCM_STREAM_PLAYBACK, 2);
   if (!outPcm) {
     tui::status("no audio output (try BB_AUDIO_OUT=plughw:0)");
     return false;
   }
   if (input) {
-    inPcm = openPcm("BB_AUDIO_IN", SND_PCM_STREAM_CAPTURE);
-    if (!inPcm)
+    // Open just enough channels to reach the highest one in use: with a
+    // plughw: device ALSA passes channels 1 to N straight through.
+    chooseChannels(left, right);
+    if (inLeft < 0) {
+      inLeft = 0;
+      inRight = 1;
+    }
+    inOpen = (inLeft > inRight ? inLeft : inRight) + 1;
+    inOpen = inOpen < 2 ? 2 : inOpen;
+    const char *name = getenv("BB_AUDIO_IN");
+    inPcm = inOpen <= kMaxIn
+                ? openPcm("BB_AUDIO_IN", SND_PCM_STREAM_CAPTURE, inOpen)
+                : nullptr;
+    if (inPcm)
+      reportInput(name ? name : "default");
+    else if (inOpen > 2)
+      tui::status("can't open that many input channels (plughw:?)");
+    else
       tui::status("no audio input (try BB_AUDIO_IN=plughw:1)");
   }
   running = true;
@@ -323,6 +533,33 @@ void AudioEngine::end() {
   if (inPcm)
     snd_pcm_close(inPcm);
   outPcm = inPcm = nullptr;
+}
+
+void detail::listInputs() {
+  printf("Audio inputs (BB_AUDIO_IN=<device>):\n");
+  // Each card's hardware device, asked for its most capture channels.
+  // A card in use by another program can't be opened and is skipped.
+  int card = -1;
+  while (snd_card_next(&card) == 0 && card >= 0) {
+    char dev[16];
+    snprintf(dev, sizeof(dev), "hw:%d", card);
+    snd_pcm_t *pcm;
+    unsigned int most = 0;
+    if (snd_pcm_open(&pcm, dev, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK) ==
+        0) {
+      snd_pcm_hw_params_t *hw;
+      snd_pcm_hw_params_alloca(&hw);
+      snd_pcm_hw_params_any(pcm, hw);
+      snd_pcm_hw_params_get_channels_max(hw, &most);
+      snd_pcm_close(pcm);
+    }
+    char *name = nullptr;
+    snd_card_get_name(card, &name);
+    if (most)
+      printf("  plughw:%-3d %-40s %u channel%s\n", card, name ? name : "?",
+             most, most == 1 ? "" : "s");
+    free(name);
+  }
 }
 
 } // namespace bb

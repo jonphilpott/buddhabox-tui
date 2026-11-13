@@ -109,7 +109,8 @@ void loop() { hz = 110.0f * fastExp2(3.0f * tui::knob(0)); }
 
 `src/bbtui/tui.h` documents the whole API:
 
-- Audio: `AudioEngine::begin`, `cpuLoad` and `cpuPeak`.
+- Audio: `AudioEngine::begin` (with optional input channels),
+  `cpuLoad` and `cpuPeak`.
 - MIDI: `Midi::begin` and `Midi::read`.
 - The panel: `tui::knob`, `switchOn`, `switchPressed`, `menuMove`,
   `menuAdjust`, `menuPressed`, `display`, `status` and `millis`.
@@ -169,6 +170,12 @@ need to change. For the licence, see Credits and licence below.
 - **Choosing a device on Linux:** `BB_AUDIO_OUT=plughw:1 ./build/acid`,
   and `BB_AUDIO_IN` for the input. `aplay -l` and `arecord -l` list
   the cards. On a Pi with a USB interface this is usually needed.
+- **Choosing the input:** `BB_AUDIO_IN` picks the device (on macOS,
+  part of its name: `BB_AUDIO_IN=zoom`), and `BB_AUDIO_IN_CHANNELS=3`
+  (or `3,4`) the channels, counting from 1. In code,
+  `AudioEngine::begin(true, 3)` or `begin(true, 3, 4)`; the variable
+  overrides the code, so it can be set once in a shell profile.
+  `./build/fx --devices` lists the inputs and their channel counts.
 - **Real-time priority on Linux:** the audio threads ask for it and
   carry on without it. To grant it, add `@audio - rtprio 95` to
   `/etc/security/limits.conf` and join the `audio` group.

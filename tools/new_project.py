@@ -49,7 +49,8 @@ CXXFLAGS += -std=c++17 -Wall -I$(BBTUI)/src
 
 ifeq ($(shell uname),Darwin)
   LDLIBS = -framework AudioToolbox -framework CoreMIDI \\
-           -framework CoreFoundation
+           -framework CoreFoundation \\
+           -framework CoreAudio
 else
   LDLIBS = -lasound -lpthread
 endif

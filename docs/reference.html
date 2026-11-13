@@ -256,13 +256,18 @@ void loop() { hz = 110.0f * fastExp2(3.0f * tui::knob(0)); }</code></pre>
 <div class="method-param">Param <code>in</code> — Interleaved stereo input [L, R, L, R, ...], -1 to 1. Silence unless AudioEngine::begin(true) opened an input.</div>
 <div class="method-param">Param <code>out</code> — Interleaved stereo output to fill, -1 to 1. Values past ±1 are clipped by the sound card: limit them yourself.</div>
 <div class="method-param">Param <code>frames</code> — Stereo frames in each buffer (AUDIO_BLOCK_SIZE, 256)</div></div></div>
-<div class="method-block"><div class="method-sig">bool AudioEngine::begin(bool input = false)</div><div class="method-desc"><p>Start the audio: the default output device (and input, if asked) at 44.1 kHz, stereo, in blocks of 256 frames. The operating system converts to the device&#x27;s own rate if it differs.</p>
-<p>On Linux it uses ALSA&#x27;s &quot;default&quot; device; set BB_AUDIO_OUT or BB_AUDIO_IN to another ALSA name to choose, for example BB_AUDIO_OUT=plughw:1 for a USB card on a Raspberry Pi.</p>
+<div class="method-block"><div class="method-sig">bool AudioEngine::begin(bool input = false, int left = 0, int right = 0)</div><div class="method-desc"><p>Start the audio: the default output device (and input, if asked) at 44.1 kHz, stereo, in blocks of 256 frames. The operating system converts to the device&#x27;s own rate if it differs.</p>
+<p>CHOOSING DEVICES. On Linux it uses ALSA&#x27;s &quot;default&quot; device; set BB_AUDIO_OUT or BB_AUDIO_IN to another ALSA name, for example BB_AUDIO_IN=plughw:1 for a USB interface. On macOS output goes to the system&#x27;s output, and BB_AUDIO_IN picks an input by part of its name (BB_AUDIO_IN=zoom). <code>./program --devices</code> lists the inputs.</p>
+<p>CHOOSING INPUT CHANNELS. <code>left</code> and <code>right</code> pick which of the device&#x27;s channels become the program&#x27;s stereo input, counting from 1 as on an interface&#x27;s panel. One channel alone is mono, sent to both sides. The environment variable BB_AUDIO_IN_CHANNELS (&quot;3&quot; or &quot;3,4&quot;) overrides them, so one line in a shell profile can serve every program. The status line shows what was opened: &quot;input: ZOOM L6, 3&quot;.</p>
 <p class="example-label">Example:</p>
-<pre><code>AudioEngine::begin();      // output only
-AudioEngine::begin(true);  // output and input</code></pre>
-<div class="method-param">Param <code>input</code> — true to open the default input as well. On macOS the first run asks for microphone permission for your terminal app. Off by default, so synths don&#x27;t ask.</div>
-<div class="method-returns">Returns: true if the output started. The panel&#x27;s status line says what failed if not.</div></div></div>
+<pre><code>AudioEngine::begin();            // output only
+AudioEngine::begin(true);        // and input channels 1 and 2
+AudioEngine::begin(true, 3);     // and input 3, mono
+AudioEngine::begin(true, 3, 4);  // and inputs 3 and 4, stereo</code></pre>
+<div class="method-param">Param <code>input</code> — true to open the input as well. On macOS the first run asks for microphone permission for your terminal app. Off by default, so synths don&#x27;t ask.</div>
+<div class="method-param">Param <code>left</code> — The device channel for the left input, from 1; 0 (the default) for the device&#x27;s first two channels</div>
+<div class="method-param">Param <code>right</code> — The device channel for the right input; 0 for the same as <code>left</code></div>
+<div class="method-returns">Returns: true if the output started. The status line says what failed if not, or if the input failed.</div></div></div>
 <div class="method-block"><div class="method-sig">float AudioEngine::cpuLoad()</div><div class="method-desc"><p class="example-label">Example:</p>
 <pre><code>float load = AudioEngine::cpuLoad();</code></pre>
 <div class="method-returns">Returns: The share of each block&#x27;s time spent in audioCallback(), smoothed: 0.25 means a quarter. The panel shows it.</div></div></div>

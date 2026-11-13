@@ -341,6 +341,34 @@ operating system converts to the device's own rate. Input reaches the
 callback through a lock-free queue, a few blocks behind, so playing
 through dry is a little late (fine for echoes; see
 <code>examples/fx</code>).</p>
+
+<h3>Choosing the input</h3>
+<p>The input is two channels of one device: by default the system's
+default input, channels 1 and 2 (or its only channel, copied to both
+sides). To choose others:</p>
+<table>
+  <tr><th>What</th><th>In code</th><th>Without recompiling</th></tr>
+  <tr><td>Channels</td><td><code>begin(true, 3)</code> for input 3,
+    mono; <code>begin(true, 3, 4)</code> for 3 and 4</td>
+    <td><code>BB_AUDIO_IN_CHANNELS=3</code> or <code>=3,4</code>
+    (overrides the code)</td></tr>
+  <tr><td>Device</td><td>&mdash;</td>
+    <td><code>BB_AUDIO_IN=zoom</code>: on macOS, part of the device's
+    name, any case; on Linux, an ALSA name such as
+    <code>plughw:1</code></td></tr>
+</table>
+<p>Channels count from 1, as on an interface's front panel. Run any
+program with <code>--devices</code> to list the inputs and their channel
+counts. When the panel starts, the status line says what it opened, such
+as <code>input: ZOOM L6, 3</code>, or why it couldn't. An interface whose
+first input is always channel 3 can be set once for every program, in
+<code>~/.zshrc</code> or <code>~/.bashrc</code>:</p>
+<pre><code>export BB_AUDIO_IN=zoom
+export BB_AUDIO_IN_CHANNELS=3</code></pre>
+<p>On macOS the device is opened with all its channels and the two in
+use are picked out; on Linux just enough channels are opened to reach
+the higher one, which needs a <code>plughw:</code> device rather than
+<code>hw:</code>.</p>
 <div class="flow">
   <span class="node mod">input device<small>its own thread</small></span>
   <span class="arrow">&rarr;</span>

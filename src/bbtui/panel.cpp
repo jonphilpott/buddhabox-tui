@@ -869,10 +869,14 @@ uint32_t tui::millis() {
 /**
  * The program: set up the terminal, call setup() once, then loop() about
  * 1000 times a second, reading keys and redrawing between calls, until
- * Ctrl-C.
+ * Ctrl-C. With --devices, list the audio inputs and stop instead.
  */
-int main() {
+int main(int argc, char **argv) {
   using namespace bb;
+  if (argc > 1 && strcmp(argv[1], "--devices") == 0) {
+    detail::listInputs();
+    return 0;
+  }
   if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
     fprintf(stderr, "buddhabox-tui needs a terminal\n");
     return 1;

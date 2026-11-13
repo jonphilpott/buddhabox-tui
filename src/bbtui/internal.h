@@ -34,6 +34,10 @@ extern std::atomic<uint32_t> midiCount;
  *  recording. Interleaved stereo, `frames` frames. */
 void recordPush(const float *out, int frames);
 
+/** Print the audio input devices and their channel counts, for
+ *  --devices. Runs before the panel starts. */
+void listInputs();
+
 /** Main thread: start a new file named after `title`, or finish the
  *  one being recorded. */
 void recordToggle(const char *title);
