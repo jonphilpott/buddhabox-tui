@@ -73,12 +73,18 @@ knob key sweeps smoothly. The panel detects this by itself.
 - `easel`: a self-playing Buchla Easel-style drone. Light switch 1 to
   play it from the knobs instead.
 - `singing_bowls`: struck resonators, chaotic drift and reverb.
+- `drone`: five oscillators on a chord, drifted by chaos, through a
+  Moog or MS-20 filter, echo and reverb. A menu and eight knobs.
+- `tanpura`: four buzzing-bridge strings plucked in a 5- or 6-beat
+  cycle, into a reverb. A menu and eight knobs.
+- `tanpura_spectral`: the same cycle, played back from wavetables
+  measured off a recording of a real tanpura.
 - `fx`: the audio input through drive, echo and a spring. The one
   example that uses the input.
 
-`acid`, `noisebox`, `easel` and `singing_bowls` are ports of the board
-examples of the same names. The DSP code is unchanged; only the
-hardware parts differ.
+`acid`, `noisebox`, `easel`, `singing_bowls`, `drone`, `tanpura` and
+`tanpura_spectral` are ports of the board examples of the same names.
+The DSP code is unchanged; only the hardware parts differ.
 
 ## Writing a program
 
