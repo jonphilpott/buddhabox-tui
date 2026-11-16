@@ -85,9 +85,10 @@ to diverge from it.</p>
 <h3>1. Install a compiler</h3>
 <h4>macOS</h4>
 <pre><code>xcode-select --install     # clang, make and git</code></pre>
-<h4>Linux and Raspberry Pi OS</h4>
-<pre><code>sudo apt install build-essential libasound2-dev   # Debian, Ubuntu, Pi OS
-# sudo dnf install gcc-c++ make alsa-lib-devel    # Fedora</code></pre>
+<h4>Debian, Ubuntu and Raspberry Pi OS</h4>
+<pre><code>sudo apt install build-essential libasound2-dev   # g++, make, ALSA headers</code></pre>
+<h4>Fedora</h4>
+<pre><code>sudo dnf install gcc-c++ make alsa-lib-devel      # g++, make, ALSA headers</code></pre>
 
 <h3>2. Build and run</h3>
 <pre><code>make              # every example, into build/
